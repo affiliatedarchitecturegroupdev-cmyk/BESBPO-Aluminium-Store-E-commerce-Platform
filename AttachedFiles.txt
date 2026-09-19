@@ -1,0 +1,1 @@
+The attached files are in the form of a PDF document and a ZIP file containing scaffolding data, files and core instructions for the development of Aluminium Store.
