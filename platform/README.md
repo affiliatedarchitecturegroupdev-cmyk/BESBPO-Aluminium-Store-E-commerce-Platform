@@ -39,13 +39,37 @@ platform/
   corrected across all affected modules.
 
 ## Read this first
-1. The companion **Technical & Product Specification (PDF)** — executive summary, feature
+1. `STATUS.md` — **the live tracker.** What exists, what works, what is still a placeholder, and
+   every known gap. Read it before trusting any claim in this README or the roadmap.
+2. The companion **Technical & Product Specification (PDF)** — executive summary, feature
    adoption matrix, wireframes/mockups, architecture diagrams, and the case for each
    architectural decision.
-2. `docs/00-overview.md` — how this platform differs from the generic Group blueprint and
+3. `docs/00-overview.md` — how this platform differs from the generic Group blueprint and
    from Roofsteel's platform.
-3. `docs/17-open-questions.md` — decisions needed from Fortune before Phase 1 build-out
+4. `docs/17-open-questions.md` — decisions needed from Fortune before Phase 1 build-out
    begins in earnest.
+
+## Verification
+
+Nothing here is claimed as working unless a test proves it. Three layers:
+
+```bash
+# Unit tests — no database needed
+cd backend && npm test                  # Jest, 37 tests
+cd pricing-service && python -m pytest  # 18 tests
+
+# End-to-end smoke test — needs a seeded database and a running backend
+cd backend && npx prisma migrate deploy && npm run prisma:seed
+node dist/main &                        # after `npm run build`
+cd .. && bash scripts/smoke.sh          # 45 checks over real HTTP
+```
+
+CI (`.github/workflows/ci.yml`) runs all of the above on every push and pull request, including
+the smoke test against a throwaway Postgres service container.
+
+`scripts/smoke.sh` is the one to run after touching auth, guards, checkout, or the province
+enum. It drives the real API — including five simultaneous checkouts against one cart to prove
+the double-submit protection still holds.
 
 ## Verified consistency
 `pricing-service/main.py` was tested against the actual Pricing Framework workbook's verified

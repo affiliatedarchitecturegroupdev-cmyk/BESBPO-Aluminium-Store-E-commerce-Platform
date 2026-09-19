@@ -66,6 +66,31 @@ rationale without searching chat history or docs.
 Every service file gets a co-located `.spec.ts` once its logic is non-trivial (more than simple
 CRUD). Phase 1 scaffold files are exempt — see `docs/16-roadmap.md`.
 
+Three verification layers now exist. Run the relevant one before claiming a change works:
+
+| Layer | Command | What it proves |
+|---|---|---|
+| Backend units | `cd backend && npm test` | Guard logic, exception mapping, enum consistency, seed integrity |
+| Pricing units | `cd pricing-service && python -m pytest` | Cost model, tier maths, workbook anchor figures |
+| Smoke | `bash scripts/smoke.sh` | The real API against a real database — auth, guards, cart, checkout race, provinces |
+
+`scripts/smoke.sh` is mandatory after touching auth, guards, checkout, or the province enum. It
+is the only test that exercises row-lock serialisation and the full HTTP surface, and it is what
+CI gates on. Do not add a database transaction test to Jest and call it verified — the smoke test
+is where concurrency is proven.
+
+## Progress tracking expectation
+
+`STATUS.md` is the live tracker and is part of the change, not a separate chore. A PR that adds,
+completes, or regresses a module updates `STATUS.md` in the same commit. Specifically:
+
+- A module moving from partial to wired updates its row and its "verified by" evidence.
+- A new placeholder gets a row with the missing piece named — never a silent stub.
+- A gap that is closed is removed from "Known gaps"; a new one is added with its blocker named.
+- The change-log table gets a line.
+
+An unverified ✅ in `STATUS.md` is a claim, not a fact. If nothing tests it, it is 🟡 or 🔴.
+
 ## Documentation expectation
 
 A new module ships with a corresponding `docs/NN-module-name.md` guideline doc — this repo has
