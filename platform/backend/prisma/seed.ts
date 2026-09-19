@@ -228,8 +228,8 @@ const PRODUCTS: ProductSeed[] = [
   { sub: 'Glazing & Glass', sku: 'ALS-GLS-0003', name: 'IGU Double-Glazed 4-12Ar-4 Low-E', configuration: 'Cut to Size', warrantyMm: 0, warrantyHeightMm: 0, baseCost: 950.0, unitOfSale: 'PER_M2', fulfilmentType: 'STOCK', segments: [Segment.RESIDENTIAL, Segment.COMMERCIAL], glazingSpec: 'Insulated Glass Unit (IGU) — Double-Glazed 4-12Ar-4 Low-E', description: 'Argon-filled low-E insulating glass unit.' },
   { sub: 'Sealants, Gaskets & Weatherproofing', sku: 'ALS-SEL-0001', name: 'Silicone Sealant — Neutral Cure', configuration: '310ml Cartridge', warrantyMm: 0, warrantyHeightMm: 0, baseCost: 118.0, unitOfSale: 'EACH', fulfilmentType: 'STOCK', segments: [Segment.COMMERCIAL, Segment.INDUSTRIAL], description: 'Neutral-cure silicone for aluminium and glass interfaces.' },
   { sub: 'Sealants, Gaskets & Weatherproofing', sku: 'ALS-SEL-0002', name: 'Glazing Gasket — EPDM', configuration: 'Per Metre', warrantyMm: 0, warrantyHeightMm: 0, baseCost: 22.0, unitOfSale: 'PER_LINEAR_METRE', fulfilmentType: 'STOCK', segments: [Segment.COMMERCIAL, Segment.RESIDENTIAL], description: 'EPDM glazing gasket, sold by the metre.' },
-  { sub: 'Fixings, Fasteners & Brackets', sku: 'ALS-FIX-0001', name: 'Self-Drilling Screw — 8×25mm', configuration: 'Box of 500', warrantyMm: 0, warrantyHeightMm: 0, baseCost: 385.0, unitOfSale: 'PER_PACK', fulfilmentType: 'STOCK', segments: [Segment.INDUSTRIAL, Segment.COMMERCIAL], description: 'Zinc-plated self-drilling screws for aluminium assembly.' },
-  { sub: 'Fixings, Fasteners & Brackets', sku: 'ALS-FIX-0002', name: 'Balustrade Bracket', configuration: 'Floor-Mount, Stainless', warrantyMm: 0, warrantyHeightMm: 0, baseCost: 240.0, unitOfSale: 'EACH', fulfilmentType: 'STOCK', segments: [Segment.COMMERCIAL, Segment.RESIDENTIAL], description: 'Floor-mount stainless bracket for post-and-handrail balustrades.' },
+  { sub: 'Fixings, Fasteners & Brackets', sku: 'ALS-FST-0001', name: 'Self-Drilling Screw — 8×25mm', configuration: 'Box of 500', warrantyMm: 0, warrantyHeightMm: 0, baseCost: 385.0, unitOfSale: 'PER_PACK', fulfilmentType: 'STOCK', segments: [Segment.INDUSTRIAL, Segment.COMMERCIAL], description: 'Zinc-plated self-drilling screws for aluminium assembly.' },
+  { sub: 'Fixings, Fasteners & Brackets', sku: 'ALS-FST-0002', name: 'Balustrade Bracket', configuration: 'Floor-Mount, Stainless', warrantyMm: 0, warrantyHeightMm: 0, baseCost: 240.0, unitOfSale: 'EACH', fulfilmentType: 'STOCK', segments: [Segment.COMMERCIAL, Segment.RESIDENTIAL], description: 'Floor-mount stainless bracket for post-and-handrail balustrades.' },
 ];
 
 async function main() {
@@ -283,6 +283,13 @@ async function main() {
 
   console.log('Seeding products…');
   const hub = await prisma.location.findFirst({ where: { isHub: true } });
+  // The upsert below keys on sku with an empty update, so a duplicate sku in PRODUCTS does not
+  // error — the second row is silently dropped and the total silently under-counts. Two products
+  // had drifted onto ALS-FIX-0001 and only 32 of the declared 33 ever landed. Fail loudly instead.
+  const duplicateSkus = PRODUCTS.map((p) => p.sku).filter((sku, i, all) => all.indexOf(sku) !== i);
+  if (duplicateSkus.length > 0) {
+    throw new Error(`Duplicate sku(s) in PRODUCTS: ${[...new Set(duplicateSkus)].join(', ')}`);
+  }
   for (const p of PRODUCTS) {
     const product = await prisma.product.upsert({
       where: { sku: p.sku },
