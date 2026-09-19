@@ -39,11 +39,41 @@ commit real values — `.env.example` files list the keys only.
 | Key | Value |
 |---|---|
 | `NEXT_PUBLIC_API_URL` | `/api/v1` — relative, so browser calls go same-origin and CORS never applies |
-| `BACKEND_ORIGIN` | Provisioned from the API service. The Next.js rewrite and server components proxy through this |
+| `BACKEND_ORIGIN` | Provisioned from the API service. The API proxy route and server components use this |
 | `NEXT_PUBLIC_SITE_URL` | The storefront's own public host |
 
-Render service host variables arrive **without a scheme**. `next.config.js` and `lib/api.ts` add
+Render service host variables arrive **without a scheme**. The proxy route and `lib/api.ts` add
 `https://` when it is missing, so `BACKEND_ORIGIN=api.onrender.com` resolves correctly.
+
+### Why the API proxy is a route handler, not a rewrite
+
+Browser calls use the root-relative `/api/v1/...`, proxied to the API by
+`app/api/v1/[...path]/route.ts`. This is deliberately **not** a `next.config.js` `rewrites()`
+entry. Next.js resolves rewrites during `next build` and bakes the destination into the route
+manifest. On Render the build machine never receives `BACKEND_ORIGIN` (it is a runtime service
+variable), so a rewrite would freeze `http://localhost:4000` as the proxy target and every
+storefront API call would fail against a host that is not there. A route handler reads the
+environment per request, so the Render-provided value is used without a rebuild.
+
+The handler forwards the `Authorization` header (the shopper's JWT lives in localStorage and the
+frontend sends it as a bearer token) and every HTTP method, and relays upstream status codes and
+error bodies unchanged so client-side error handling still works.
+
+## Images
+
+Each service also has a `Dockerfile` for the container path (and for local `docker-compose`):
+
+| Service | Base | Note |
+|---|---|---|
+| `pricing-service` | `python:3.12-slim` | Runs as `nobody` |
+| `backend` | `node:20-bookworm-slim` multi-stage | Installs `openssl` — see below |
+| `frontend` | `node:20-bookworm-slim` multi-stage | Uses Next.js `output: 'standalone'` |
+
+The backend image installs `openssl` in both stages. Prisma selects its query-engine binary at
+`prisma generate` time by probing for OpenSSL. The slim image ships `libssl3` but no `openssl`
+binary, so the probe fails, Prisma silently falls back to the `openssl-1.1.x` engine, and the
+container then dies at boot with `libssl.so.1.1: cannot open shared object file`. Installing
+`openssl` makes the probe resolve to the `3.0.x` engine that matches bookworm.
 
 ## Migrations
 
