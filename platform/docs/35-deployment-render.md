@@ -1,0 +1,105 @@
+# Deployment — Render
+
+`render.yaml` at the repository root is the source of truth. Render is the
+target platform for this division; the Group's Coolify-on-EC2 standard does not apply here.
+
+## Services
+
+The blueprint declares four resources, all in one region so the internal network is available:
+
+| Resource | Type | Purpose |
+|---|---|---|
+| `aluminium-store-db` | PostgreSQL 16 | Primary datastore |
+| `aluminium-store-pricing` | Python web service | FastAPI price engine (configurator) |
+| `aluminium-store-api` | Node web service | NestJS API |
+| `aluminium-store-storefront` | Node web service | Next.js storefront |
+
+Region is currently `frankfurt` because Supabase's `af-south-1` is not a Render region. If data
+sovereignty requires a South African region, the alternative is to keep the database on Supabase
+and point `DATABASE_URL` at it, leaving the three web services on Render. That decision is open —
+see `docs/17-open-questions.md`.
+
+## Environment variables
+
+Secrets are marked `sync: false` in the blueprint and entered in the Render dashboard. Never
+commit real values — `.env.example` files list the keys only.
+
+### API (`aluminium-store-api`)
+
+| Key | Source |
+|---|---|
+| `DATABASE_URL` | Provisioned from `aluminium-store-db` |
+| `JWT_SECRET` | Dashboard secret. **Must be at least 32 characters** — the app refuses to boot in production if it is shorter |
+| `PRICING_SERVICE_URL` | Provisioned from the pricing service |
+| `CORS_ORIGINS` | Provisioned from the storefront host |
+| `PAYFAST_MERCHANT_ID`, `PAYFAST_MERCHANT_KEY`, `LULAPAY_API_KEY`, `PAYJUSTNOW_API_KEY` | Dashboard secrets, once the gateways are contracted (Phase 3) |
+
+### Storefront (`aluminium-store-storefront`)
+
+| Key | Value |
+|---|---|
+| `NEXT_PUBLIC_API_URL` | `/api/v1` — relative, so browser calls go same-origin and CORS never applies |
+| `BACKEND_ORIGIN` | Provisioned from the API service. The API proxy route and server components use this |
+| `NEXT_PUBLIC_SITE_URL` | The storefront's own public host |
+
+Render service host variables arrive **without a scheme**. The proxy route and `lib/api.ts` add
+`https://` when it is missing, so `BACKEND_ORIGIN=api.onrender.com` resolves correctly.
+
+### Why the API proxy is a route handler, not a rewrite
+
+Browser calls use the root-relative `/api/v1/...`, proxied to the API by
+`app/api/v1/[...path]/route.ts`. This is deliberately **not** a `next.config.js` `rewrites()`
+entry. Next.js resolves rewrites during `next build` and bakes the destination into the route
+manifest. On Render the build machine never receives `BACKEND_ORIGIN` (it is a runtime service
+variable), so a rewrite would freeze `http://localhost:4000` as the proxy target and every
+storefront API call would fail against a host that is not there. A route handler reads the
+environment per request, so the Render-provided value is used without a rebuild.
+
+The handler forwards the `Authorization` header (the shopper's JWT lives in localStorage and the
+frontend sends it as a bearer token) and every HTTP method, and relays upstream status codes and
+error bodies unchanged so client-side error handling still works.
+
+## Images
+
+Each service also has a `Dockerfile` for the container path (and for local `docker-compose`):
+
+| Service | Base | Note |
+|---|---|---|
+| `pricing-service` | `python:3.12-slim` | Runs as `nobody` |
+| `backend` | `node:20-bookworm-slim` multi-stage | Installs `openssl` — see below |
+| `frontend` | `node:20-bookworm-slim` multi-stage | Uses Next.js `output: 'standalone'` |
+
+The backend image installs `openssl` in both stages. Prisma selects its query-engine binary at
+`prisma generate` time by probing for OpenSSL. The slim image ships `libssl3` but no `openssl`
+binary, so the probe fails, Prisma silently falls back to the `openssl-1.1.x` engine, and the
+container then dies at boot with `libssl.so.1.1: cannot open shared object file`. Installing
+`openssl` makes the probe resolve to the `3.0.x` engine that matches bookworm.
+
+## Migrations
+
+`startCommand` runs `npx prisma migrate deploy` before `node dist/main`. This runs at release
+time rather than in `buildCommand` because the build environment cannot reach the private
+database URL. `migrate deploy` is idempotent and takes an advisory lock, so restarts and
+multiple instances are safe.
+
+## Health checks
+
+`GET /api/v1/health` is the API's health check. It returns 200 only when a `SELECT 1` against
+the database succeeds; otherwise it returns 503, which stops Render promoting a release with no
+working database.
+
+## Verifying a deploy
+
+```bash
+curl https://<api-host>/api/v1/health
+# {"status":"ok","database":"ok","uptimeSeconds":12,"checkedInMs":3}
+
+curl -o /dev/null -s -w '%{http_code}\n' https://<storefront-host>/
+# 200
+```
+
+## Local equivalents
+
+`docker-compose.yml` orchestrates postgres, redis, and all three services for local development.
+Note that `docker-compose.yml` still describes the Coolify/EC2 target in its header comment; the
+Render blueprint is authoritative for this division.
