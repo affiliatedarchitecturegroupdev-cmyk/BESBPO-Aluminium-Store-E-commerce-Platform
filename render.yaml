@@ -1,0 +1,117 @@
+# Render Blueprint — Aluminium Store platform.
+# Lives at the repository root because Render discovers render.yaml there; rootDir values
+# below are relative to this file, which is why they read platform/backend, not backend.
+# A Specialised Operating Division of Besbpo Group.
+#
+# Render is the target deploy platform for this division (the Group's Coolify-on-EC2 standard
+# does not apply here). Blueprint docs: https://render.com/docs/blueprint-spec
+#
+# Services are declared in dependency order: database, then pricing-service (backend calls it),
+# then the API, then the storefront. `fromService`/`fromDatabase` wire internal URLs so no host
+# names are hardcoded. Secrets marked `sync: false` are entered in the Render dashboard and are
+# never committed — see backend/.env.example for the full list.
+
+databases:
+  - name: aluminium-store-db
+    databaseName: aluminium_store
+    user: aluminium_store
+    # af-south-1 is the Group standard for data sovereignty (docs/01-tech-stack.md). Pick the
+    # matching region below; Render requires the database and services to share a region.
+    region: frankfurt
+    plan: basic-1gb
+    postgresMajorVersion: "16"
+
+services:
+  # ---- Pricing microservice (FastAPI) ----
+  # The configurator's price engine. stateless and read-only apart from assumptions.json.
+  - type: web
+    name: aluminium-store-pricing
+    runtime: python
+    region: frankfurt
+    plan: starter
+    rootDir: platform/pricing-service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+
+  # ---- API (NestJS) ----
+  - type: web
+    name: aluminium-store-api
+    runtime: node
+    region: frankfurt
+    plan: starter
+    rootDir: platform/backend
+    buildCommand: npm ci && npx prisma generate && npm run build
+    # Migrations run before the server accepts traffic. `migrate deploy` is idempotent and takes
+    # an advisory lock, so this is safe on restart and across instances. It runs here rather than
+    # in buildCommand because the build step has no access to the private database URL.
+    startCommand: npx prisma migrate deploy && node dist/main
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20.18.0"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aluminium-store-db
+          property: connectionString
+      # Secret values live in the Render dashboard, never in this file.
+      - key: JWT_SECRET
+        sync: false
+      - key: PRICING_SERVICE_URL
+        # Internal URL: traffic to another Render service stays on the private network.
+        fromService:
+          type: web
+          name: aluminium-store-pricing
+          property: hostport
+      - key: CORS_ORIGINS
+        fromService:
+          type: web
+          name: aluminium-store-storefront
+          property: host
+      - key: PAYFAST_MERCHANT_ID
+        sync: false
+      - key: PAYFAST_MERCHANT_KEY
+        sync: false
+      - key: LULAPAY_API_KEY
+        sync: false
+      - key: PAYJUSTNOW_API_KEY
+        sync: false
+
+  # ---- Storefront (Next.js) ----
+  - type: web
+    name: aluminium-store-storefront
+    runtime: node
+    region: frankfurt
+    plan: starter
+    rootDir: platform/frontend
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -- --port $PORT
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20.18.0"
+      - key: NODE_ENV
+        value: production
+      # Browser calls use the same-origin /api/v1 path, proxied by the Next.js rewrite in
+      # next.config.js, so this stays a relative path and CORS never applies to shoppers.
+      - key: NEXT_PUBLIC_API_URL
+        value: /api/v1
+      - key: BACKEND_ORIGIN
+        # Server-side proxy target for the rewrite and for server components' serverFetch.
+        fromService:
+          type: web
+          name: aluminium-store-api
+          property: hostport
+      - key: NEXT_PUBLIC_SITE_URL
+        fromService:
+          type: web
+          name: aluminium-store-storefront
+          property: host

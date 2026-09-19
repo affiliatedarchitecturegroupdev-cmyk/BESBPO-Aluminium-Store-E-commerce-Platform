@@ -1,0 +1,16 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  --slate: #1B2733;
+  --glass: #3E6E91;
+  --pane: #F5F3EE;
+  --silver: #A9B2BD;
+  --brass: #C08A4E;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', sans-serif;
+  background: var(--pane);
+  color: var(--slate);
+}

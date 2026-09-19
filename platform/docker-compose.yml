@@ -1,0 +1,41 @@
+# Local development orchestration — Aluminium Store platform
+# A Specialised Operating Division of Besbpo Group
+# Production deploy target remains Coolify on EC2 (Group standard); this is dev-only.
+version: "3.9"
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: aluminium_store
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
+  pricing-service:
+    build: ./pricing-service
+    ports: ["8000:8000"]
+    volumes: ["./pricing-service:/app"]
+
+  backend:
+    build: ./backend
+    ports: ["4000:4000"]
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres:5432/aluminium_store?schema=public
+      PRICING_SERVICE_URL: http://pricing-service:8000
+      REDIS_URL: redis://redis:6379
+    depends_on: [postgres, redis, pricing-service]
+
+  frontend:
+    build: ./frontend
+    ports: ["3000:3000"]
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api/v1
+    depends_on: [backend]
+
+volumes:
+  pgdata:

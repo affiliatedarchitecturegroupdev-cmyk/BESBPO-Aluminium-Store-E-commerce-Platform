@@ -1,0 +1,1083 @@
+// ============================================================
+// ALUMINIUM STORE PLATFORM — DATABASE SCHEMA
+// A Specialised Operating Division of Besbpo Group
+// Stack: PostgreSQL via Supabase (af-south-1) — per Group standard
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------
+// CATALOGUE
+// ------------------------------------------------------------
+
+model Category {
+  id            String        @id @default(cuid())
+  name          String        @unique
+  slug          String        @unique
+  description   String?
+  iconKey       String?       // maps to frontend icon set (windowpane-grid family)
+  sortOrder     Int           @default(0)
+  subCategories SubCategory[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+model SubCategory {
+  id          String    @id @default(cuid())
+  category    Category  @relation(fields: [categoryId], references: [id])
+  categoryId  String
+  name        String
+  slug        String    @unique
+  pricingBasis PricingBasis
+  products    Product[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([categoryId])
+}
+
+enum PricingBasis {
+  FRAME_GLAZED
+  FRAME_ONLY
+  FOOTPRINT_FRAME
+  LENGTH_RUN
+  FRAME_GLAZED_OPTIONAL
+  EXTRUSION_LENGTH
+  RATE_CARD
+}
+
+model Product {
+  id              String       @id @default(cuid())
+  sku             String       @unique
+  subCategory     SubCategory  @relation(fields: [subCategoryId], references: [id])
+  subCategoryId   String
+  name            String
+  configuration   String
+  standardSize    String?
+  widthMm         Int?
+  heightMm        Int?
+  lengthM         Decimal?     @db.Decimal(8, 2)
+  finish          Finish?      @relation(fields: [finishId], references: [id])
+  finishId        String?
+  glazingSpec     String?
+  unitOfSale      UnitOfSale
+  segments        Segment[]
+  fulfilmentType  FulfilmentType
+  complianceRefs  ComplianceDoc[]
+  baseCost        Decimal      @db.Decimal(12, 2)
+  images          ProductImage[]
+  stockLevel      StockLevel?
+  cartItems       CartItem[]
+  orderItems      OrderItem[]
+  reviews         Review[]
+  wishlistItems   WishlistItem[]
+  questions       ProductQuestion[]
+  bundleItems     BundleItem[]
+  active          Boolean      @default(true)
+  feedExcluded    Boolean      @default(false) // opt out of Meta/Google/TikTok product feed sync
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([subCategoryId])
+  @@index([sku])
+}
+
+enum UnitOfSale {
+  EACH
+  PER_LINEAR_METRE
+  PER_M2
+  PER_SET
+  PER_PACK
+}
+
+enum FulfilmentType {
+  STOCK
+  MADE_TO_ORDER
+  CMI_PARTNER_NETWORK
+}
+
+enum Segment {
+  COMMERCIAL
+  INDUSTRIAL
+  INSTITUTIONAL
+  RESIDENTIAL
+}
+
+model Finish {
+  id          String    @id @default(cuid())
+  name        String    @unique   // Natural Anodised, Satin White, Charcoal Grey, Bronze Anodised, Graphite Black
+  hex         String
+  costPerM2   Decimal   @db.Decimal(10, 2)
+  qualicoat   Boolean   @default(false)
+  qualanod    Boolean   @default(false)
+  products    Product[]
+}
+
+model GlazingPackage {
+  id            String   @id @default(cuid())
+  name          String   @unique   // Standard Single-Glazed, IGU Double-Glazed, Laminated Safety, etc.
+  upgradeRateM2 Decimal  @db.Decimal(10, 2)
+  nrcsApproved  Boolean  @default(true)  // VC 9003
+  description   String?
+}
+
+model ProductImage {
+  id        String   @id @default(cuid())
+  product   Product  @relation(fields: [productId], references: [id])
+  productId String
+  url       String
+  altText   String
+  sortOrder Int      @default(0)
+}
+
+model StockLevel {
+  id          String   @id @default(cuid())
+  product     Product  @relation(fields: [productId], references: [id])
+  productId   String   @unique
+  quantity    Int      @default(0)
+  reserved    Int      @default(0)
+  reorderAt   Int      @default(5)
+  location    Location? @relation(fields: [locationId], references: [id])
+  locationId  String?
+  updatedAt   DateTime @updatedAt
+}
+
+model StockMovement {
+  id          String   @id @default(cuid())
+  productSku  String
+  delta       Int
+  reason      String
+  reference   String?
+  createdAt   DateTime @default(now())
+}
+
+model Location {
+  id          String       @id @default(cuid())
+  name        String       // e.g. "Gauteng Production Hub", "KZN Fabrication Yard"
+  province    Province
+  address     String
+  isHub       Boolean      @default(false)
+  stockLevels StockLevel[]
+}
+
+enum Province {
+  GAUTENG
+  KWAZULU_NATAL
+  WESTERN_CAPE
+  EASTERN_CAPE
+  FREE_STATE
+  LIMPOPO
+  MPUMALANGA
+  NORTH_WEST
+  NORTHERN_CAPE
+}
+
+// ------------------------------------------------------------
+// COMPLIANCE
+// ------------------------------------------------------------
+
+model ComplianceDoc {
+  id          String    @id @default(cuid())
+  products    Product[]
+  standard    String    // "AAAMSA Performance Cert", "NRCS VC 9003", "SANS 10400-XA", etc.
+  docType     String    // Certificate, Rating, Marking
+  issuer      String?
+  fileUrl     String?
+  validUntil  DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// ------------------------------------------------------------
+// USERS & TRADE ACCOUNTS
+// ------------------------------------------------------------
+
+model User {
+  id              String          @id @default(cuid())
+  email           String          @unique
+  name            String
+  phone           String?
+  // Local email/password credential (the "EMAIL" sign-in option). OAuth-only users have
+  // this null and authenticate through OAuthAccount. In production the credential store is
+  // delegated to Supabase Auth per the Group standard — this column supports local/dev and
+  // the fallback path (docs/18-authentication-sso.md).
+  passwordHash    String?
+  role            UserRole        @default(RETAIL)
+  authProviders   OAuthAccount[]
+  company         Company?        @relation(fields: [companyId], references: [id])
+  companyId       String?
+  companyRole     CompanyRole?    // OWNER / BUYER / VIEWER — only set when companyId is set
+  cart            Cart?
+  orders          Order[]
+  quotes          Quote[]
+  reviews         Review[]
+  addresses       Address[]
+  wishlist        Wishlist?
+  productQuestions ProductQuestion[]
+  supportTickets  SupportTicket[]
+  supportMessages SupportMessage[]
+  loyaltyAccount  LoyaltyAccount?
+  legalAcceptances LegalDocumentAcceptance[]
+  dsarRequests    DsarRequest[]
+  chatSessions    ChatSession[]
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
+
+enum UserRole {
+  RETAIL
+  TRADE
+  VOLUME
+  CMI_PARTNER
+  STAFF
+  ADMIN
+}
+
+// ------------------------------------------------------------
+// AUTHENTICATION — Email + 5 OAuth providers
+// ------------------------------------------------------------
+
+model OAuthAccount {
+  id                String       @id @default(cuid())
+  user              User         @relation(fields: [userId], references: [id])
+  userId            String
+  provider          AuthProvider
+  providerAccountId String
+  accessToken       String?
+  refreshToken      String?
+  createdAt         DateTime     @default(now())
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+enum AuthProvider {
+  EMAIL
+  GOOGLE
+  FACEBOOK
+  X
+  APPLE
+  MICROSOFT
+}
+
+// ------------------------------------------------------------
+// COMPANY / BUSINESS DESK (Trade & Volume accounts, multi-seat)
+// ------------------------------------------------------------
+
+model Company {
+  id              String        @id @default(cuid())
+  name            String
+  registrationNo  String?
+  vatNumber       String?
+  users           User[]
+  tradeAccount    TradeAccount?
+  statements      Statement[]
+  createdAt       DateTime      @default(now())
+}
+
+enum CompanyRole {
+  OWNER   // full access — team management, statements, credit
+  BUYER   // can order/quote, no team/billing management
+  VIEWER  // read-only — order history and statements
+}
+
+model TradeAccount {
+  id              String       @id @default(cuid())
+  company         Company      @relation(fields: [companyId], references: [id])
+  companyId       String       @unique
+  creditLimit     Decimal?     @db.Decimal(12, 2)
+  creditUsed      Decimal      @db.Decimal(12, 2) @default(0)
+  discountTier    DiscountTier @default(TRADE)
+  approved        Boolean      @default(false)
+  approvedAt      DateTime?
+  createdAt       DateTime     @default(now())
+}
+
+enum DiscountTier {
+  RETAIL
+  TRADE
+  VOLUME
+}
+
+model Statement {
+  id          String   @id @default(cuid())
+  company     Company  @relation(fields: [companyId], references: [id])
+  companyId   String
+  periodStart DateTime
+  periodEnd   DateTime
+  totalDue    Decimal  @db.Decimal(12, 2)
+  fileUrl     String?
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+}
+
+model Address {
+  id          String   @id @default(cuid())
+  user        User     @relation(fields: [userId], references: [id])
+  userId      String
+  line1       String
+  line2       String?
+  city        String
+  province    Province
+  postalCode  String
+  isDefault   Boolean  @default(false)
+  orders      Order[]
+}
+
+// ------------------------------------------------------------
+// CART, CONFIGURATOR, ORDERS
+// ------------------------------------------------------------
+
+model Cart {
+  id        String     @id @default(cuid())
+  user      User       @relation(fields: [userId], references: [id])
+  userId    String     @unique
+  items     CartItem[]
+  updatedAt DateTime   @updatedAt
+}
+
+model CartItem {
+  id             String   @id @default(cuid())
+  cart           Cart     @relation(fields: [cartId], references: [id])
+  cartId         String
+  product        Product  @relation(fields: [productId], references: [id])
+  productId      String
+  quantity       Int      @default(1)
+  configSnapshot Json?    // configurator selections at time of add (size/finish/glazing)
+  unitPrice      Decimal  @db.Decimal(12, 2)
+}
+
+model Order {
+  id              String        @id @default(cuid())
+  orderNumber     String        @unique
+  user            User          @relation(fields: [userId], references: [id])
+  userId          String
+  items           OrderItem[]
+  status          OrderStatus   @default(PENDING)
+  fulfilmentPath  FulfilmentType
+  cmiPartner      CMIPartner?   @relation(fields: [cmiPartnerId], references: [id])
+  cmiPartnerId    String?
+  subtotal        Decimal       @db.Decimal(12, 2)
+  vatAmount       Decimal       @db.Decimal(12, 2) @default(0) // 15% per current SARS VAT Act rate — see docs/23-legal-tax-compliance.md
+  deliveryFee     Decimal       @db.Decimal(12, 2) @default(0)
+  fragileSurcharge Decimal      @db.Decimal(12, 2) @default(0)
+  coupon          Coupon?       @relation(fields: [couponId], references: [id])
+  couponId        String?
+  discountAmount  Decimal       @db.Decimal(12, 2) @default(0)
+  total           Decimal       @db.Decimal(12, 2)
+  paymentMethod   PaymentMethod
+  paymentRef      String?
+  shipment        Shipment?
+  invoice         Invoice?
+  deliveryAddress Address?      @relation(fields: [deliveryAddressId], references: [id])
+  deliveryAddressId String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+enum OrderStatus {
+  PENDING
+  PAYMENT_CONFIRMED
+  IN_FABRICATION
+  ROUTED_TO_CMI_PARTNER
+  READY_FOR_DISPATCH
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+enum PaymentMethod {
+  PAYFAST
+  LULAPAY_BNPL
+  PAYJUSTNOW
+  TRADE_ACCOUNT_TERMS
+  EFT
+  OZOW
+  STITCH
+  CAPITEC_PAY
+  PAYFLEX_BNPL
+  SNAPSCAN
+  ZAPPER
+  APPLE_PAY
+  GOOGLE_PAY
+}
+
+model OrderItem {
+  id             String   @id @default(cuid())
+  order          Order    @relation(fields: [orderId], references: [id])
+  orderId        String
+  product        Product  @relation(fields: [productId], references: [id])
+  productId      String
+  quantity       Int
+  configSnapshot Json?
+  unitPrice      Decimal  @db.Decimal(12, 2)
+  lineTotal      Decimal  @db.Decimal(12, 2)
+  nonReturnable  Boolean  @default(false) // true for Made-to-Order / CMI custom items
+  returnRequest  ReturnRequest?
+}
+
+model Shipment {
+  id              String        @id @default(cuid())
+  order           Order         @relation(fields: [orderId], references: [id])
+  orderId         String        @unique
+  courierRecord   Courier?      @relation(fields: [courierId], references: [id])
+  courierId       String?
+  courierNameFreeText String?   // fallback when no Courier record exists yet (e.g. "Besfleet" internal)
+  pickupPoint     PickupPoint?  @relation(fields: [pickupPointId], references: [id])
+  pickupPointId   String?
+  trackingNumber  String?
+  waybillUrl      String?
+  fragileHandling Boolean       @default(false)
+  weightKg        Decimal?      @db.Decimal(10, 2)
+  distanceKm      Decimal?      @db.Decimal(10, 2)
+  status          ShipmentStatus @default(PENDING)
+  dispatchedAt    DateTime?
+  deliveredAt     DateTime?
+}
+
+enum ShipmentStatus {
+  PENDING
+  DISPATCHED
+  IN_TRANSIT
+  DELIVERED
+  FAILED
+}
+
+// ------------------------------------------------------------
+// QUOTES / RFQ (large projects, curtain walling, CMI routing)
+// ------------------------------------------------------------
+
+model Quote {
+  id            String      @id @default(cuid())
+  quoteNumber   String      @unique
+  user          User        @relation(fields: [userId], references: [id])
+  userId        String
+  projectName   String?
+  items         QuoteItem[]
+  status        QuoteStatus @default(SUBMITTED)
+  cmiPartner    CMIPartner? @relation(fields: [cmiPartnerId], references: [id])
+  cmiPartnerId  String?
+  notes         String?
+  validUntil    DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+enum QuoteStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  ROUTED_TO_CMI_PARTNER
+  QUOTED
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+model QuoteItem {
+  id            String   @id @default(cuid())
+  quote         Quote    @relation(fields: [quoteId], references: [id])
+  quoteId       String
+  description   String
+  subCategorySlug String?
+  approxAreaM2  Decimal? @db.Decimal(10, 2)
+  quantity      Int      @default(1)
+  notes         String?
+}
+
+// ------------------------------------------------------------
+// CMI PARTNER NETWORK
+// ------------------------------------------------------------
+
+model CMIPartner {
+  id            String    @id @default(cuid())
+  name          String
+  province      Province
+  vettedSince   DateTime?
+  nrcsApproved  Boolean   @default(false)
+  aaamsaMember  Boolean   @default(false)
+  capabilities  String[]  // e.g. ["Curtain Walling", "Shopfront Systems"]
+  capacityM2PerMonth Int?
+  orders        Order[]
+  quotes        Quote[]
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+}
+
+// ------------------------------------------------------------
+// PRICING (mirrors the Pricing Framework workbook)
+// ------------------------------------------------------------
+
+model PricingAssumption {
+  id      String  @id @default(cuid())
+  key     String  @unique // "AlumCostPerKg", "FabricationPct", etc.
+  value   Decimal @db.Decimal(12, 4)
+  notes   String?
+}
+
+model MarkupBand {
+  id            String  @id @default(cuid())
+  categorySlug  String
+  subCategorySlug String?
+  markupPct     Decimal @db.Decimal(5, 4)
+}
+
+model DeliveryZone {
+  id              String   @id @default(cuid())
+  province        Province
+  radiusKm        Int      @default(30)
+  baseFee         Decimal  @db.Decimal(10, 2)
+  weightBandKg    Int
+  fragileSurchargePct Decimal @db.Decimal(5, 4) @default(0.08)
+}
+
+// ------------------------------------------------------------
+// CMS — homepage content blocks, promotional banners, media library
+// ------------------------------------------------------------
+
+model ContentBlock {
+  id          String     @id @default(cuid())
+  key         String     @unique // e.g. "homepage-hero-slide-1", "promo-banner-top"
+  type        ContentType
+  title       String?
+  body        String?
+  imageUrl    String?
+  linkUrl     String?
+  sortOrder   Int        @default(0)
+  published   Boolean    @default(false)
+  publishAt   DateTime?
+  updatedBy   String?    // User.id of the editor, for an audit trail
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+enum ContentType {
+  HERO_SLIDE
+  PROMO_BANNER
+  CATEGORY_FEATURE
+  ANNOUNCEMENT
+  SEO_METADATA
+}
+
+model MediaAsset {
+  id        String   @id @default(cuid())
+  url       String
+  altText   String
+  tags      String[]
+  sizeBytes Int?
+  uploadedBy String?
+  createdAt DateTime @default(now())
+}
+
+// ------------------------------------------------------------
+// REVIEWS
+// ------------------------------------------------------------
+
+model Review {
+  id         String   @id @default(cuid())
+  product    Product  @relation(fields: [productId], references: [id])
+  productId  String
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  rating     Int
+  comment    String?
+  photoUrls  String[]
+  createdAt  DateTime @default(now())
+}
+
+// ------------------------------------------------------------
+// LEGAL & TAX COMPLIANCE (ECTA / POPIA / PAIA / CPA / SARS)
+// See docs/23-legal-tax-compliance.md
+// ------------------------------------------------------------
+
+model LegalDocument {
+  id          String            @id @default(cuid())
+  slug        String            // "terms", "privacy", "cookies", "returns", "paia-manual", "accessibility"
+  type        LegalDocumentType
+  title       String
+  version     String            // e.g. "1.2" — the version a buyer accepted travels with their order
+  bodyMarkdown String           @db.Text
+  publishedAt DateTime?
+  acceptances LegalDocumentAcceptance[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@unique([slug, version])
+}
+
+enum LegalDocumentType {
+  TERMS_AND_CONDITIONS  // ECTA-aligned — Section 43 disclosure fields live here
+  PRIVACY_POLICY        // POPIA-aligned
+  COOKIE_POLICY
+  RETURNS_REFUNDS       // CPA 6-month implied warranty disclosure
+  PAIA_MANUAL
+  ACCESSIBILITY_STATEMENT
+}
+
+model LegalDocumentAcceptance {
+  id              String        @id @default(cuid())
+  user            User          @relation(fields: [userId], references: [id])
+  userId          String
+  legalDocument   LegalDocument @relation(fields: [legalDocumentId], references: [id])
+  legalDocumentId String
+  version         String
+  acceptedAt      DateTime      @default(now())
+
+  @@index([userId])
+}
+
+model Invoice {
+  id                String   @id @default(cuid())
+  invoiceNumber     String   @unique // sequential, per SARS requirement — never reused
+  order             Order    @relation(fields: [orderId], references: [id])
+  orderId           String   @unique
+  merchantVatNumber String
+  customerVatNumber String?  // required for B2B (Trade/Volume) invoices
+  subtotal          Decimal  @db.Decimal(12, 2)
+  vatAmount         Decimal  @db.Decimal(12, 2) // 15% — see docs/23-legal-tax-compliance.md for the current-rate note
+  total             Decimal  @db.Decimal(12, 2)
+  pdfUrl            String?
+  issuedAt          DateTime @default(now())
+}
+
+// Atomic monotonic counters for documents that must never repeat a number (SARS invoices,
+// order numbers). A row-level UPDATE ... SET value = value + 1 ... RETURNING is the one
+// operation Postgres serialises for us, so concurrent writers cannot mint the same value —
+// counting existing rows and adding one cannot make that guarantee.
+model Counter {
+  key       String   @id // e.g. "invoice:2026", "order:260919"
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+model DsarRequest {
+  id          String        @id @default(cuid())
+  user        User          @relation(fields: [userId], references: [id])
+  userId      String
+  type        DsarType
+  status      DsarStatus    @default(RECEIVED)
+  requestedAt DateTime      @default(now())
+  resolvedAt  DateTime?
+  notes       String?
+
+  @@index([userId])
+}
+
+enum DsarType {
+  ACCESS       // "send me everything you hold on me"
+  CORRECTION
+  DELETION     // "right to be forgotten"
+}
+
+enum DsarStatus {
+  RECEIVED
+  IN_PROGRESS
+  COMPLETED
+  DECLINED // e.g. legally required retention (tax records) overrides a deletion request
+}
+
+// ------------------------------------------------------------
+// LOGISTICS — courier API layer & PUDO pickup-point network
+// See docs/24-logistics-integrations.md
+// ------------------------------------------------------------
+
+model Courier {
+  id          String     @id @default(cuid())
+  name        String     @unique // "Bob Go", "The Courier Guy", "RAM", "Aramex"
+  apiProvider String?    // aggregator this courier is reached through, e.g. "Bob Go" itself is often the aggregator
+  active      Boolean    @default(true)
+  shipments   Shipment[]
+}
+
+model PickupPoint {
+  id        String       @id @default(cuid())
+  network   PudoNetwork
+  name      String
+  address   String
+  province  Province
+  latitude  Decimal?     @db.Decimal(9, 6)
+  longitude Decimal?     @db.Decimal(9, 6)
+  active    Boolean      @default(true)
+  shipments Shipment[]
+}
+
+enum PudoNetwork {
+  PARGO
+  POSTNET
+}
+
+// ------------------------------------------------------------
+// COMMUNICATIONS — WhatsApp / SMS / Email delivery log
+// See docs/25-communications.md
+// ------------------------------------------------------------
+
+model NotificationLog {
+  id        String              @id @default(cuid())
+  userId    String?
+  channel   NotificationChannel
+  event     String              // "ORDER_CONFIRMED", "ABANDONED_CART", "QUOTE_READY", etc.
+  status    String              // provider-reported delivery status
+  sentAt    DateTime            @default(now())
+
+  @@index([userId])
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+// ------------------------------------------------------------
+// STOREFRONT UX — wishlists, product Q&A
+// See docs/26-storefront-ux-extras.md
+// ------------------------------------------------------------
+
+model Wishlist {
+  id     String         @id @default(cuid())
+  user   User           @relation(fields: [userId], references: [id])
+  userId String         @unique
+  items  WishlistItem[]
+}
+
+model WishlistItem {
+  id                String   @id @default(cuid())
+  wishlist          Wishlist @relation(fields: [wishlistId], references: [id])
+  wishlistId        String
+  product           Product  @relation(fields: [productId], references: [id])
+  productId         String
+  priceAtAdd        Decimal  @db.Decimal(12, 2)
+  notifyOnPriceDrop Boolean  @default(true)
+  addedAt           DateTime @default(now())
+
+  @@unique([wishlistId, productId])
+}
+
+model ProductQuestion {
+  id         String    @id @default(cuid())
+  product    Product   @relation(fields: [productId], references: [id])
+  productId  String
+  user       User      @relation(fields: [userId], references: [id])
+  userId     String
+  question   String
+  answer     String?
+  answeredAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([productId])
+}
+
+// ------------------------------------------------------------
+// CONTENT — Blog & FAQ (Help Center)
+// See docs/27-content-pages.md
+// ------------------------------------------------------------
+
+model BlogPost {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  title       String
+  body        String    @db.Text
+  authorName  String
+  tags        String[]
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model FaqItem {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String   @db.Text
+  category  String   // "Ordering", "Payment", "Delivery", "Returns", "Technical Specs"
+  sortOrder Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+// ------------------------------------------------------------
+// BACK-OFFICE — Returns / RMA
+// See docs/28-back-office-extras.md
+// ------------------------------------------------------------
+
+model ReturnRequest {
+  id           String       @id @default(cuid())
+  orderItem    OrderItem    @relation(fields: [orderItemId], references: [id])
+  orderItemId  String       @unique
+  reason       String
+  status       ReturnStatus @default(REQUESTED)
+  refundAmount Decimal?     @db.Decimal(12, 2)
+  requestedAt  DateTime     @default(now())
+  resolvedAt   DateTime?
+}
+
+enum ReturnStatus {
+  REQUESTED
+  APPROVED
+  REJECTED       // e.g. item was Made-to-Order / non-returnable per ECTA s42(2)
+  ITEM_RECEIVED
+  REFUNDED
+}
+
+// ------------------------------------------------------------
+// CRM / HELPDESK — architecture-level scaffold (see docs/29-crm-helpdesk.md
+// for why this is intentionally not a full CRM build in Phase 1)
+// ------------------------------------------------------------
+
+model SupportTicket {
+  id           String            @id @default(cuid())
+  user         User              @relation(fields: [userId], references: [id])
+  userId       String
+  subject      String
+  channel      SupportChannel
+  status       SupportStatus     @default(OPEN)
+  priority     SupportPriority   @default(NORMAL)
+  messages     SupportMessage[]
+  chatSession  ChatSession?      @relation(fields: [chatSessionId], references: [id])
+  chatSessionId String?          @unique // set when a ChatSession escalates to a human ticket
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([userId])
+}
+
+enum SupportChannel {
+  EMAIL
+  CHAT
+  WHATSAPP
+}
+
+enum SupportStatus {
+  OPEN
+  PENDING_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+enum SupportPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model SupportMessage {
+  id        String   @id @default(cuid())
+  ticket    SupportTicket @relation(fields: [ticketId], references: [id])
+  ticketId  String
+  sender    User     @relation(fields: [senderId], references: [id])
+  senderId  String
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([ticketId])
+}
+
+// ------------------------------------------------------------
+// AI SUPPORT AGENT — architecture-level scaffold, not a working model
+// (see docs/30-ai-support-agent.md for the honest scope note)
+// ------------------------------------------------------------
+
+model ChatSession {
+  id             String        @id @default(cuid())
+  user           User?         @relation(fields: [userId], references: [id])
+  userId         String?
+  status         ChatStatus    @default(ACTIVE)
+  messages       ChatMessage[]
+  escalatedTicket SupportTicket?
+  startedAt      DateTime      @default(now())
+  endedAt        DateTime?
+
+  @@index([userId])
+}
+
+enum ChatStatus {
+  ACTIVE
+  ESCALATED   // handed off to a human — see SupportTicket.chatSessionId
+  CLOSED
+}
+
+model ChatMessage {
+  id        String      @id @default(cuid())
+  session   ChatSession @relation(fields: [sessionId], references: [id])
+  sessionId String
+  role      ChatRole
+  content   String      @db.Text
+  createdAt DateTime    @default(now())
+
+  @@index([sessionId])
+}
+
+enum ChatRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+model KnowledgeBaseEntry {
+  id          String   @id @default(cuid())
+  title       String
+  content     String   @db.Text
+  category    String   // "Product Specs", "Pricing", "Lead Times", "Compliance", "Supplier Info"
+  sourceRef   String?  // e.g. "Pricing Framework v1.0, Sliding Windows" — traceability back to source docs
+  updatedAt   DateTime @updatedAt
+}
+
+// ------------------------------------------------------------
+// MARKETING — coupons, bundles, loyalty, newsletter, abandoned-cart
+// See docs/31-marketing-engine.md
+// ------------------------------------------------------------
+
+model Coupon {
+  id            String      @id @default(cuid())
+  code          String      @unique
+  type          CouponType
+  value         Decimal     @db.Decimal(10, 2) // percentage points OR fixed Rand amount, per `type`
+  minCartValue  Decimal?    @db.Decimal(12, 2)
+  expiresAt     DateTime?
+  usageLimit    Int?
+  usedCount     Int         @default(0)
+  orders        Order[]
+  active        Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_SHIPPING
+}
+
+model Bundle {
+  id            String       @id @default(cuid())
+  name          String
+  description   String?
+  discountPct   Decimal      @db.Decimal(5, 4)
+  items         BundleItem[]
+  active        Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+}
+
+model BundleItem {
+  id        String  @id @default(cuid())
+  bundle    Bundle  @relation(fields: [bundleId], references: [id])
+  bundleId  String
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+  quantity  Int     @default(1)
+}
+
+model LoyaltyAccount {
+  id             String               @id @default(cuid())
+  user           User                 @relation(fields: [userId], references: [id])
+  userId         String               @unique
+  pointsBalance  Int                  @default(0)
+  tier           LoyaltyTier          @default(BRONZE)
+  transactions   LoyaltyTransaction[]
+  createdAt      DateTime             @default(now())
+}
+
+enum LoyaltyTier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+model LoyaltyTransaction {
+  id               String         @id @default(cuid())
+  loyaltyAccount   LoyaltyAccount @relation(fields: [loyaltyAccountId], references: [id])
+  loyaltyAccountId String
+  points           Int            // positive = earned, negative = redeemed
+  reason           String         // "Order #ALS-1234", "Referral bonus", "Birthday bonus"
+  createdAt        DateTime       @default(now())
+
+  @@index([loyaltyAccountId])
+}
+
+model NewsletterSubscriber {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  source        String?  // "footer", "homepage-popup", "checkout-optin"
+  active        Boolean  @default(true)
+  subscribedAt  DateTime @default(now())
+  unsubscribedAt DateTime?
+}
+
+model AbandonedCartLog {
+  id             String   @id @default(cuid())
+  cartId         String   @unique
+  userId         String?
+  lastActivityAt DateTime
+  remindersSent  Int      @default(0)
+  recoveredAt    DateTime?
+}
+
+// ------------------------------------------------------------
+// ADVERTISEMENTS — in-store ad placement cards (8 slots between homepage sections)
+// See docs/32-ad-placements.md
+// ------------------------------------------------------------
+
+model Advertisement {
+  id           String    @id @default(cuid())
+  slot         Int        // 1-8, position between homepage sections
+  campaignName String
+  imageUrl     String
+  linkUrl      String
+  startAt      DateTime?
+  endAt        DateTime?
+  active       Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+
+  @@index([slot])
+}
+
+// ------------------------------------------------------------
+// PROJECTS — CMI Design/Manufacture/Install showcase + hero slider
+// See docs/33-projects-showcase.md
+// ------------------------------------------------------------
+
+model Project {
+  id           String         @id @default(cuid())
+  title        String
+  description  String         @db.Text
+  sector       Segment
+  categorySlug String?        // links back to a Category, informational only
+  images       ProjectImage[]
+  featured     Boolean        @default(false) // featured = appears in the projects hero slider
+  completedAt  DateTime?
+  createdAt    DateTime       @default(now())
+}
+
+model ProjectImage {
+  id        String  @id @default(cuid())
+  project   Project @relation(fields: [projectId], references: [id])
+  projectId String
+  url       String
+  caption   String?
+  sortOrder Int     @default(0)
+}
+
+// ------------------------------------------------------------
+// ANALYTICS — lightweight server-side event capture
+// (Client-side behaviour tracking is PostHog/GA4 — see docs/34-analytics.md.
+// This table is for server-side business events worth querying directly in
+// Postgres alongside orders/quotes, not a replacement for a real analytics tool.)
+// ------------------------------------------------------------
+
+model AnalyticsEvent {
+  id         String   @id @default(cuid())
+  userId     String?
+  sessionId  String?
+  eventType  String   // "PRICE_VIEWED", "CMI_ROUTED", "QUOTE_REQUESTED", "COUPON_APPLIED", etc.
+  metadata   Json?
+  occurredAt DateTime @default(now())
+
+  @@index([eventType])
+  @@index([userId])
+}
