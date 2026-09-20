@@ -254,10 +254,10 @@ jobs:
           cd ../backend && npm run build
           nohup node dist/main > /tmp/backend.log 2>&1 &
           cd ../frontend
-          # The frontend uses output:standalone, so `next start` is not the entry point.
           npm run build
-          BACKEND_ORIGIN=http://127.0.0.1:4000 NEXT_PUBLIC_API_URL=/api/v1 PORT=3000 \
-            nohup node .next/standalone/server.js > /tmp/frontend.log 2>&1 &
+          # Same entry point Render uses (stages static assets, then runs the standalone server).
+          BACKEND_ORIGIN=http://127.0.0.1:4000 NEXT_PUBLIC_API_URL=/api/v1 PORT=3000 HOSTNAME=127.0.0.1 \
+            nohup npm run start > /tmp/frontend.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:4000/api/v1/health > /dev/null \
               && curl -sf http://127.0.0.1:3000/ > /dev/null \

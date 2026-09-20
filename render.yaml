@@ -92,7 +92,10 @@ services:
     plan: starter
     rootDir: platform/frontend
     buildCommand: npm ci && npm run build
-    startCommand: npm run start -- --port $PORT
+    # `npm run start` is scripts/start-standalone.sh, not `next start`: output:standalone does not
+    # support `next start`, and the bundle does not include .next/static or public/ unless they
+    # are staged beside it first. The script does that, then runs the supported entry point.
+    startCommand: npm run start
     healthCheckPath: /
     autoDeploy: true
     envVars:

@@ -69,6 +69,13 @@ Each service also has a `Dockerfile` for the container path (and for local `dock
 | `backend` | `node:20-bookworm-slim` multi-stage | Installs `openssl` — see below |
 | `frontend` | `node:20-bookworm-slim` multi-stage | Uses Next.js `output: 'standalone'` |
 
+The frontend image copies `public/` and `.next/static/` beside the standalone bundle explicitly,
+because `output: 'standalone'` does not include them. The Render *native Node runtime* does not use
+the Dockerfile, so it needs the same staging done at start time: `npm run start` runs
+`scripts/start-standalone.sh`, which copies those two trees into `.next/standalone/` and then execs
+`node .next/standalone/server.js`. This matters because Next.js warns that `next start` does not
+support standalone output, and the bundle on its own serves the HTML but 404s every static asset.
+
 The backend image installs `openssl` in both stages. Prisma selects its query-engine binary at
 `prisma generate` time by probing for OpenSSL. The slim image ships `libssl3` but no `openssl`
 binary, so the probe fails, Prisma silently falls back to the `openssl-1.1.x` engine, and the
