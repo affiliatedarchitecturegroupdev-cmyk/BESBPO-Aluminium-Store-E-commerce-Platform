@@ -18,22 +18,25 @@ Last verified: 2026-09-19 · Branch: `main` · Deploy target: Render (`render.ya
 | 🔴 Not started | Scaffold only, or absent. |
 
 "Verified by" names the actual check that proves it — `smoke` = `scripts/smoke.sh`,
-`spec` = co-located Jest spec, `ci` = build/typecheck gate. An unverified ✅ is a claim, not a fact.
+`spec` = co-located Jest spec, `e2e` = Playwright suite under `e2e/`, `ci` = build/typecheck gate.
+An unverified ✅ is a claim, not a fact.
 
 ## Snapshot
 
 | Metric | Value |
 |---|---|
-| Source files (`.ts`/`.tsx`/`.py`/`.prisma`) | 220 |
-| Source lines | ~10,960 |
+| Source files (`.ts`/`.tsx`/`.py`/`.prisma`) | 230 |
+| Source lines | ~12,030 |
 | Prisma models | 60 |
 | API route handlers | 128 |
 | Backend modules | 32 |
 | Storefront routes | 39 |
 | Docs | 35 |
-| Migrations | 4 |
-| Unit tests | 55 (37 backend Jest, 18 pricing pytest) |
-| Smoke checks | 45 |
+| Migrations | 5 |
+| Unit tests | 61 (43 backend Jest, 18 pricing pytest) |
+| Smoke checks | 51 |
+| Browser e2e tests | 5 (Playwright, `platform/e2e`) |
+| Catalogue | 2,147 SKUs / 7 categories / 31 sub-categories |
 
 ## How to verify this file
 
@@ -44,6 +47,9 @@ cd platform/pricing-service && python3 -m pytest
 
 # End-to-end smoke test (needs a running, seeded Postgres + backend)
 cd platform && bash scripts/smoke.sh
+
+# Browser e2e (needs seeded DB + running backend and frontend; starts its own if needed)
+cd platform/e2e && npx playwright test
 ```
 
 CI (`.github/workflows/ci.yml`) runs the builds and unit tests on every push and PR. The smoke
@@ -59,7 +65,7 @@ Phase definitions live in `docs/16-roadmap.md`.
 - [x] JWT auth, registration, login, guards
 - [x] Catalogue taxonomy + read APIs
 - [x] Storefront shell, navigation, browse pages
-- [x] Seed data: 7 categories, 31 sub-categories, 33 products, 9 delivery zones
+- [x] Seed data: 9 delivery zones, 7 categories, 31 sub-categories
 - [x] Deployability pass for Render (`docs/35-deployment-render.md`)
 
 ### Phase 2 — Configurator & Pricing 🟡 In progress
@@ -67,7 +73,8 @@ Phase definitions live in `docs/16-roadmap.md`.
 - [x] FastAPI pricing microservice (glazing, finishes, markup, trade/volume tiers)
 - [x] Configurator API + UI
 - [x] Cart (add/update/remove, stock reservation)
-- [ ] **Full 2,147-SKU catalogue** — blocked on the Master Product Catalogue workbook (see Gaps)
+- [x] **Full 2,147-SKU catalogue** — imported from the workbook by `scripts/import-catalogue.py`
+- [x] Add-to-cart from the product page, priced server-side from the configuration
 - [ ] Street-level delivery address capture on checkout
 - [ ] Gateway hosted-page redirect at checkout
 
@@ -136,16 +143,22 @@ registered — but nothing proves they behave correctly. Treat them as unverifie
 | `payments` | Method dispatch, order ownership check, trade-terms eligibility gating | Gateway calls build a bare `redirectUrl` with no signature and no credential use. **No webhook handler, so no payment can be confirmed.** |
 | `communications` | Call sites and interfaces are in place | All senders are `TODO(phase-2)`: WhatsApp, SMS (Clickatell/BulkSMS), transactional email (Postmark/SendGrid/SES). Nothing is sent today. |
 | `ai-agent` | Endpoint, DTOs, grounding contract | Returns a placeholder; the Claude call and pgvector retrieval are `TODO(phase-2)`, explicitly not faked. |
-| `catalog` (writes) | Validated DTOs, admin create/update, FK and conflict errors mapped | Master Product Catalogue workbook import/sync is not built. |
+| `catalog` (writes) | Validated DTOs, admin create/update, FK and conflict errors mapped; full workbook import via `scripts/import-catalogue.py` | In-app *re-sync* of a changed workbook is still a manual, out-of-band script run. |
 
 ## Known gaps and blockers
 
-1. **The catalogue is at 33 SKUs, not 2,147.** `docs/00-overview.md` and `docs/02-storefront-ux-ia.md`
-   describe the full 2,147-SKU catalogue. The seeded set is 7 categories / 31 sub-categories / 33
-   products. `docs/04-catalogue-cms.md` names the **Master Product Catalogue workbook** as the
-   canonical source of SKU definitions, and that workbook was **not included** in
-   `aluminium-store-platform.zip` (which contains only scaffold code and docs). Nothing is broken —
-   the data has not been handed over. This blocks the launch-readiness of every category page.
+1. **Catalogue imported; volume pricing below cost on thin-margin commodities.** The
+   2,147-SKU Master Product Catalogue workbook has been imported (`scripts/import-catalogue.py` →
+   `data/catalogue.json` → `seed.ts`), so the catalogue gap is closed. The import surfaced a
+   **pricing-framework defect that is now with the client**: the workbook applies a flat
+   `VOLUME_DISCOUNT` of 20% off retail, but the extrusion and glazing markup bands are only 18%
+   and 25%. The volume tier therefore lands at or below the cost build-up on **165 rows** — 144
+   extrusion rows (worst case 5.6% *below* cost) and 21 glazing rows (exactly at cost). The
+   pricing service reproduces the same arithmetic (`main.py:79-88`), so this is the workbook's
+   formula, not an import error. The importer does not invent corrective prices; the exposure is
+   pinned by a test (`seed.spec.ts`, "confines every at-or-below-cost volume price…") so it cannot
+   silently spread to finished goods. **No VOLUME-tier account should be approved until the client
+   confirms a floor or a per-band discount.** Retail and trade clear cost on all 2,147 rows.
 2. **No live payment can be confirmed.** No gateway is integrated and no webhook exists. Checkout
    correctly creates an order, but an order can never transition to paid. This is the largest
    functional gap between the scaffold and a trading store.
@@ -162,5 +175,6 @@ registered — but nothing proves they behave correctly. Treat them as unverifie
 
 | Date | Change |
 |---|---|
+| 2026-09-19 | Imported the 2,147-SKU Master Product Catalogue workbook (`scripts/import-catalogue.py`); added retail/trade/volume price columns and tier-aware cart pricing; added add-to-cart to the product page; added a Playwright e2e suite; retargeted the seed integrity tests at `data/catalogue.json`. Found and flagged the workbook's below-cost volume pricing on 165 thin-margin rows. |
 | 2026-09-19 | Added this tracker, the smoke test, Jest/pytest suites and CI. Fixed the missing `FREE_STATE`/`NORTHERN_CAPE` migration and the duplicate `ALS-FIX-0001` SKU. |
 | 2026-09-19 | Render deployability pass: runtime API proxy replacing the build-time rewrite, Dockerfiles for all three services, guard/checkout/newsletter hardening. |

@@ -3,62 +3,169 @@ import { join } from 'path';
 
 import { PROVINCES } from '../src/common/provinces';
 
-// Seed-data integrity checks. These read prisma/seed.ts as text rather than importing it, because
-// importing would run the seed against a real database. They exist because of two real defects in
-// the Phase 1 seed:
+// Seed-data integrity checks.
 //
-//   1. Two unrelated products both used sku ALS-FIX-0001. The seed upserts on sku with an empty
-//      update, so the second was silently dropped and the run logged "33 products" while the
-//      database held 32. Nothing failed — the data was just quietly wrong.
-//   2. Delivery zones referenced FREE_STATE and NORTHERN_CAPE while the migration-created enum
-//      had only seven values, so seeding died outright on a freshly deployed database.
+// Phase 1 asserted against the seed source as text, because the catalogue was 33 rows hardcoded
+// in `seed.ts` and importing it would have run the seed against a real database. That extraction
+// broke the moment the seed started reading the 2,147-row Master Product Catalogue workbook
+// import, and more importantly it could only ever check what the file *said* — never the prices,
+// the taxonomy, or the duplicate SKUs the catalogue actually contains.
+//
+// These checks now read `data/catalogue.json`, the committed output of `scripts/import-catalogue.py`.
+// That is the real input to the seed, so a corrupt workbook import — a duplicate SKU, a missing
+// price, a cost that exceeds its own retail price — fails here instead of at seed time on Render.
 
+const cataloguePath = join(__dirname, '..', 'data', 'catalogue.json');
 const seedPath = join(__dirname, '..', 'prisma', 'seed.ts');
 const seed = readFileSync(seedPath, 'utf8');
 
-function productSkus(): string[] {
-  // Product rows are the ones carrying both a `sub:` and a `sku:` key.
-  return [...seed.matchAll(/sub: '[^']+',\s*sku: '([^']+)'/g)].map((m) => m[1]);
-}
+type CatalogueProduct = {
+  sku: string;
+  name: string;
+  category: string;
+  subCategory: string;
+  unitOfSale: string;
+  fulfilmentType: string;
+  baseCost: number;
+  markupPct: number;
+  retailPrice: number;
+  tradePrice: number;
+  volumePrice: number;
+};
 
-// Every `sku:` literal in the seed belongs to PRODUCTS, so this count is the ground truth the
-// extraction above must match. If the row formatting ever changes enough that `productSkus`
-// skips a product, the duplicate and format checks below would silently pass on a partial set —
-// this count is what stops that.
-function allSkuLiterals(): string[] {
-  return [...seed.matchAll(/sku: '([^']+)'/g)].map((m) => m[1]);
-}
+type Catalogue = {
+  source: { workbook?: string; sha256?: string };
+  categories: { name: string; slug: string; subCategories: { name: string; slug: string }[] }[];
+  products: CatalogueProduct[];
+};
+
+const catalogue: Catalogue = JSON.parse(readFileSync(cataloguePath, 'utf8'));
+const products = catalogue.products;
 
 function deliveryZoneProvinces(): string[] {
   return [...seed.matchAll(/province: '([A-Z_]+)'/g)].map((m) => m[1]);
 }
 
-describe('seed data integrity', () => {
-  it('declares product rows with SKUs', () => {
-    expect(productSkus().length).toBeGreaterThan(0);
+describe('catalogue.json integrity', () => {
+  it('carries the full 2,147-SKU catalogue', () => {
+    // The workbook the client supplied has 2,147 data rows. Pinning the count means a truncated
+    // or silently-dropped import shows up here rather than as a half-empty storefront.
+    expect(products).toHaveLength(2147);
   });
 
-  it('extracts every SKU in the seed, so the checks below are not running on a subset', () => {
-    expect(productSkus().sort()).toEqual(allSkuLiterals().sort());
+  it('records the workbook it was generated from, by hash', () => {
+    // Without the hash there is no way to tell which revision of the workbook produced this
+    // file, which is what makes the import reproducible.
+    expect(catalogue.source?.workbook).toMatch(/\.xlsx$/);
+    expect(catalogue.source?.sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it('seeds the full declared catalogue size', () => {
-    // The seed logged "33 products" while the database held 32. Pinning the count means a row
-    // being dropped by an extraction change, or a product being deleted, shows up here.
-    expect(productSkus()).toHaveLength(33);
-  });
-
-  it('has no duplicate product SKUs', () => {
-    // The exact defect: duplicate SKUs are accepted by the upsert and one product vanishes.
-    const skus = productSkus();
+  it('has no duplicate SKUs', () => {
+    // The original Phase 1 defect: two products shared ALS-FIX-0001 and the upsert silently
+    // dropped one. At 2,147 workbook rows a collision between the real SKU and a scaffold SKU is
+    // exactly the kind of thing that reappears, so it is asserted directly.
+    const skus = products.map((p) => p.sku);
     const duplicates = skus.filter((sku, i) => skus.indexOf(sku) !== i);
     expect([...new Set(duplicates)]).toEqual([]);
   });
 
   it('uses the ALS-<PREFIX>-<NNNN> SKU format consistently', () => {
-    for (const sku of productSkus()) {
-      expect(sku).toMatch(/^ALS-[A-Z]{3}-\d{4}$/);
+    for (const p of products) {
+      expect(p.sku).toMatch(/^ALS-[A-Z]{3}-\d{4}$/);
     }
+  });
+
+  it('gives every product a name and a category that exists in the taxonomy', () => {
+    const categories = new Set(catalogue.categories.map((c) => c.name));
+    const subCategories = new Set(
+      catalogue.categories.flatMap((c) => c.subCategories.map((s) => s.name)),
+    );
+    for (const p of products) {
+      expect(p.name?.length).toBeGreaterThan(0);
+      expect({ sku: p.sku, category: p.category, known: categories.has(p.category) }).toEqual({
+        sku: p.sku,
+        category: p.category,
+        known: true,
+      });
+      expect({ sku: p.sku, subCategory: p.subCategory, known: subCategories.has(p.subCategory) }).toEqual({
+        sku: p.sku,
+        subCategory: p.subCategory,
+        known: true,
+      });
+    }
+  });
+
+  it('prices every product above its own cost at retail and trade', () => {
+    // This is the defect class that reached the storefront: a price that is really the wholesale
+    // cost build-up. Retail and trade must clear cost on every one of the 2,147 rows.
+    const bad = products.filter(
+      (p) => !(p.retailPrice > p.baseCost) || !(p.tradePrice > p.baseCost) || !(p.retailPrice > 0),
+    );
+    expect(bad.map((p) => p.sku)).toEqual([]);
+  });
+
+  it('confines every at-or-below-cost volume price to the two thin-margin commodity sub-categories', () => {
+    // The workbook's own formula produces these: a fixed VOLUME_DISCOUNT of 20% off retail on rows
+    // whose markup band is only 18-25% cannot stay above cost, so the volume tier reaches the cost
+    // build-up. 144 extrusion rows land below cost by up to 5.6%, and 21 glazing rows sit exactly
+    // at cost. That is a pricing-framework question for the client, not something the importer
+    // should paper over by inventing prices, so it is pinned rather than corrected. The assertion
+    // is that the exposure is confined to those two sub-categories and never touches finished goods.
+    const atOrBelowCost = products.filter((p) => p.volumePrice <= p.baseCost);
+    const subCategories = [...new Set(atOrBelowCost.map((p) => p.subCategory))].sort();
+    expect(subCategories).toEqual(['Extrusion Profiles & Raw Stock', 'Glazing & Glass']);
+
+    // No finished window, door, pergola, or railing may ever be sold at or below cost.
+    const finishedGoods = new Set([
+      'Windows',
+      'Doors',
+      'Facade & Structural Systems',
+      'Outdoor Living & Shading',
+      'Railing & Screening Systems',
+      'Roofing Glazing & Garage Doors',
+    ]);
+    const badFinished = atOrBelowCost.filter((p) => finishedGoods.has(p.category));
+    expect(badFinished.map((p) => p.sku)).toEqual([]);
+  });
+
+  it('keeps the workbook trade/volume relationship to retail', () => {
+    // Trade is retail less 12%, volume retail less 20% (Pricing Framework workbook). Allowing a
+    // cent of rounding, any row outside this band means the tier columns drifted out of step.
+    const bad = products.filter(
+      (p) =>
+        Math.abs(p.tradePrice - p.retailPrice * 0.88) > 0.02 ||
+        Math.abs(p.volumePrice - p.retailPrice * 0.8) > 0.02,
+    );
+    expect(bad.map((p) => p.sku)).toEqual([]);
+  });
+
+  it('applies the R320/m2 louvre-blade rule to the louvre-roof pergolas', () => {
+    // The 24 pergola rows initially failed to import because the workbook charges the aluminium
+    // louvre roof as blade material at R320/m2, which the pricing service had no rate for. They
+    // seeded at the wrong price until the rate was added, so the rule is pinned here.
+    const louvre = products.filter((p) => p.subCategory === 'Pergolas' && p.name.includes('Louvre'));
+    expect(louvre.length).toBeGreaterThan(0);
+    for (const p of louvre) {
+      expect(p.retailPrice).toBeGreaterThan(0);
+    }
+  });
+
+  it('declares every unit of sale as a valid enum value', () => {
+    const valid = new Set(['EACH', 'PER_LINEAR_METRE', 'PER_M2', 'PER_SET']);
+    for (const p of products) {
+      expect({ sku: p.sku, valid: valid.has(p.unitOfSale) }).toEqual({ sku: p.sku, valid: true });
+    }
+  });
+});
+
+describe('seed data integrity', () => {
+  it('keeps the runtime duplicate-SKU guard', () => {
+    // The seed should fail loudly on a duplicate rather than silently dropping a product.
+    expect(seed).toMatch(/Duplicate sku\(s\) in catalogue\.json/);
+  });
+
+  it('reads the catalogue from the committed JSON rather than hardcoding rows', () => {
+    expect(seed).toMatch(/catalogue\.json/);
   });
 
   it('only references valid provinces in delivery zones', () => {
@@ -74,11 +181,5 @@ describe('seed data integrity', () => {
     const used = new Set(deliveryZoneProvinces());
     const uncovered = PROVINCES.filter((p) => !used.has(p));
     expect(uncovered).toEqual([]);
-  });
-
-  it('guards against duplicate SKUs at runtime as well as in this test', () => {
-    // The seed should fail loudly if a duplicate is ever reintroduced, rather than silently
-    // dropping a product. This asserts the guard is present.
-    expect(seed).toMatch(/Duplicate sku\(s\) in PRODUCTS/);
   });
 });

@@ -54,7 +54,13 @@ def compute_area_rate_price(req: PriceRequest) -> float:
     hardware = ASSUMPTIONS["HARDWARE_ALLOWANCE"].get(
         req.category, ASSUMPTIONS["HARDWARE_ALLOWANCE"].get(req.subCategory, 0)
     )
-    return area_m2 * (area_rate + glazing_upgrade) + hardware
+    base = area_m2 * (area_rate + glazing_upgrade) + hardware
+    # A solid aluminium louvre blade is charged as blade material per m² on top of the area
+    # rate — the workbook's IF(spec="Aluminium Louvre Blade") branch. Such a roof carries no
+    # glazing, and this is what makes a louvre-roof pergola cost more than a glass one.
+    if req.glazingSpec == "Aluminium Louvre Blade":
+        base += area_m2 * ASSUMPTIONS["LOUVRE_BLADE_MATERIAL_PER_M2"]
+    return base
 
 
 def markup_for(category: str, sub_category: str) -> float:

@@ -50,7 +50,14 @@ export type Product = {
   unitOfSale: string;
   segments: string[];
   fulfilmentType: 'STOCK' | 'MADE_TO_ORDER' | 'CMI_PARTNER_NETWORK';
+  // Wholesale cost build-up. Never render this as a customer price — use retailPrice.
+  // It is exposed only so the admin catalogue screen can show margin.
   baseCost: string | number;
+  markupPct: string | number;
+  retailPrice: string | number;
+  tradePrice: string | number;
+  volumePrice: string | number;
+  frameClass: string | null;
   active: boolean;
   images?: ProductImage[];
   finish?: Finish | null;

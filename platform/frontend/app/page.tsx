@@ -34,7 +34,7 @@ function toCarouselProducts(products: Product[]): CarouselProduct[] {
   return products.map((p) => ({
     sku: p.sku,
     name: `${p.name}${p.widthMm && p.heightMm ? ` — ${p.widthMm}×${p.heightMm}mm` : ''}`,
-    priceLabel: formatRand(p.baseCost),
+    priceLabel: formatRand(p.retailPrice),
     badge: p.fulfilmentType === 'MADE_TO_ORDER' ? 'Made to Order' : undefined,
   }));
 }

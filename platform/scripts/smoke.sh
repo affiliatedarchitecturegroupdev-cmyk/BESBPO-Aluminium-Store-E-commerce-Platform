@@ -130,11 +130,13 @@ check "business-desk/team without a token returns 401" 401 "$S"
 
 # ---------------------------------------------------------------- catalog
 echo "catalog"
-S=$(status GET "/catalog/products?limit=1")
+S=$(status GET "/catalog/products?take=1")
 check "catalogue product list returns 200" 200 "$S"
 PRODUCT_ID=$(body | jq_get "['items'][0]['id']")
 PRODUCT_SKU=$(body | jq_get "['items'][0]['sku']")
 SUB_ID=$(body | jq_get "['items'][0]['subCategoryId']")
+PRODUCT_BASE=$(body | jq_get "['items'][0]['baseCost']")
+PRODUCT_TRADE=$(body | jq_get "['items'][0]['tradePrice']")
 assert_ok "catalogue returns at least one product" "$([ -n "$PRODUCT_ID" ] && [ "$PRODUCT_ID" != "None" ] && echo 0 || echo 1)"
 
 S=$(status GET "/catalog/by-sku/$PRODUCT_SKU")
@@ -172,13 +174,59 @@ check "trade role cannot create a product (403)" 403 "$S"
 S=$(status POST /catalog "$ADMIN_TOKEN" '{"sku":"ALS-SMOKE-0001"}')
 check "incomplete product body is rejected with 400" 400 "$S" "$(body)"
 
+# A product must carry a retail price, not just a base cost. Posting cost-only is the shape that
+# produced the cost-as-price defect, so it must be rejected rather than defaulted.
 S=$(status POST /catalog "$ADMIN_TOKEN" \
-  "{\"sku\":\"$PRODUCT_SKU\",\"name\":\"Dup\",\"subCategoryId\":\"$SUB_ID\",\"configuration\":\"c\",\"unitOfSale\":\"EACH\",\"fulfilmentType\":\"STOCK\",\"baseCost\":1.0}")
+  "{\"sku\":\"ALS-SMOKE-NOPRICE\",\"name\":\"Cost only\",\"subCategoryId\":\"$SUB_ID\",\"configuration\":\"c\",\"unitOfSale\":\"EACH\",\"fulfilmentType\":\"STOCK\",\"baseCost\":100.0}")
+check "product without a retail price is rejected with 400" 400 "$S" "$(body)"
+
+# Fully-formed body, so the duplicate is rejected because the SKU exists and not because some
+# other field is missing.
+DUP_BODY="{\"sku\":\"$PRODUCT_SKU\",\"name\":\"Dup\",\"subCategoryId\":\"$SUB_ID\",\"configuration\":\"c\",\"unitOfSale\":\"EACH\",\"fulfilmentType\":\"STOCK\",\"baseCost\":1.0,\"markupPct\":0.42,\"retailPrice\":1.42,\"tradePrice\":1.25,\"volumePrice\":1.14}"
+S=$(status POST /catalog "$ADMIN_TOKEN" "$DUP_BODY")
 check_one_of "duplicate SKU is rejected with 409" "409" "$S" "$(body)"
 
 S=$(status POST /catalog "$ADMIN_TOKEN" \
-  "{\"sku\":\"ALS-SMOKE-BADENUM\",\"name\":\"Bad\",\"subCategoryId\":\"$SUB_ID\",\"configuration\":\"c\",\"unitOfSale\":\"NOT_A_UNIT\",\"fulfilmentType\":\"STOCK\",\"baseCost\":1.0}")
+  "{\"sku\":\"ALS-SMOKE-BADENUM\",\"name\":\"Bad\",\"subCategoryId\":\"$SUB_ID\",\"configuration\":\"c\",\"unitOfSale\":\"NOT_A_UNIT\",\"fulfilmentType\":\"STOCK\",\"baseCost\":1.0,\"markupPct\":0.42,\"retailPrice\":1.42,\"tradePrice\":1.25,\"volumePrice\":1.14}")
 check "invalid enum value is rejected with 400" 400 "$S"
+
+# ---------------------------------------------------------------- pricing integrity
+echo "pricing integrity"
+# The storefront must never render the wholesale cost as a customer price, and the cart must never
+# sell at it. Both held before this suite existed: the listing pages formatted baseCost, and the
+# cart used baseCost for every sub-category the pricing service could not compute. Assert the
+# relationship directly, so a regression fails here rather than in production.
+S=$(status GET "/catalog/products?take=120")
+assert_ok "catalogue prices are positive and above cost on every row" \
+  "$(python3 -c "
+import json
+d=json.load(open('/tmp/smoke_body.json'))
+bad=[p['sku'] for p in d['items']
+     if not (float(p['retailPrice'])>0 and float(p['retailPrice'])>float(p['baseCost'])
+             and float(p['tradePrice'])>float(p['baseCost'])
+             and float(p['volumePrice'])>float(p['baseCost']))]
+print(1 if bad else 0)
+" 2>/dev/null || echo 1)"
+
+# Trade is 88% of retail and volume 80%, per the Pricing Framework workbook.
+assert_ok "trade/volume tiers keep the workbook's 0.88/0.80 relationship to retail" \
+  "$(python3 -c "
+import json
+d=json.load(open('/tmp/smoke_body.json'))
+bad=[p['sku'] for p in d['items']
+     if abs(float(p['tradePrice'])-float(p['retailPrice'])*0.88)>0.02
+     or abs(float(p['volumePrice'])-float(p['retailPrice'])*0.80)>0.02]
+print(1 if bad else 0)
+" 2>/dev/null || echo 1)"
+
+# Sorting must order by what the shopper pays, not by our cost.
+S=$(status GET "/catalog/products?sort=price-asc&take=20")
+assert_ok "price-ascending sorts by retail price" \
+  "$(python3 -c "
+import json
+v=[float(p['retailPrice']) for p in json.load(open('/tmp/smoke_body.json'))['items']]
+print(0 if v==sorted(v) else 1)
+" 2>/dev/null || echo 1)"
 
 # ---------------------------------------------------------------- cart
 echo "cart"
@@ -188,6 +236,25 @@ check "deleting an unknown cart line returns 404 (not 500)" 404 "$S"
 S=$(status POST /cart/items "$TRADE_TOKEN" "{\"productId\":\"$PRODUCT_ID\",\"quantity\":1}")
 check_one_of "add to cart succeeds" "200 201" "$S" "$(body)"
 CART_ITEM_ID=$(body | jq_get "['id']")
+
+# The added line must be priced at the trade tier, not at cost. A trade buyer pays 88% of retail,
+# which is still strictly above baseCost; anything at or below baseCost is a sale at cost.
+assert_ok "trade cart line is priced above cost, not at it" \
+  "$(python3 -c "
+import json
+d=json.load(open('/tmp/smoke_body.json'))
+print(0 if float(d['unitPrice']) > $PRODUCT_BASE else 1)
+" 2>/dev/null || echo 1)"
+
+# The same line priced at the catalogue's trade tier. This is the assertion that would have
+# failed on every rate-card, extrusion-length and length-run item before the cart was fixed,
+# because those never reached the pricing service and fell back to baseCost.
+assert_ok "trade cart line equals the catalogue trade price" \
+  "$(python3 -c "
+import json
+d=json.load(open('/tmp/smoke_body.json'))
+print(0 if abs(float(d['unitPrice']) - $PRODUCT_TRADE) < 0.01 else 1)
+" 2>/dev/null || echo 1)"
 
 S=$(status GET /cart "$TRADE_TOKEN")
 check "read cart returns 200" 200 "$S"

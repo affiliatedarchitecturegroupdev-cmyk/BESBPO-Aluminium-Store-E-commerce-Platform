@@ -38,6 +38,29 @@ export class CreateProductDto {
   @Min(0)
   baseCost: number;
 
+  // The three customer-facing tiers. Admin-created products must carry a retail price, because a
+  // product with no retail price is unpriced rather than free — the cart refuses to price it and
+  // the database CHECK constraint rejects it. baseCost alone is not sufficient to sell.
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(0)
+  markupPct: number;
+
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  retailPrice: number;
+
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  tradePrice: number;
+
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  volumePrice: number;
+
+  @IsOptional()
+  @IsString()
+  frameClass?: string;
+
   @IsOptional()
   @IsString()
   standardSize?: string;

@@ -48,14 +48,31 @@ export class CartService {
     const widthMm = dto.widthMm ?? product.widthMm ?? 0;
     const heightMm = dto.heightMm ?? product.heightMm ?? 0;
 
-    // The pricing service implements the area-rate branch only (FRAME_GLAZED). Sub-categories
-    // priced on a different basis (rate-card hardware, extrusion length) use the catalogue's
-    // baseCost. A pricing-service failure must not block a sale of a priceable item either —
-    // it falls back to the last catalogue price and records which path was taken.
-    let unitPrice = Number(product.baseCost);
-    let pricedVia: 'PRICING_SERVICE' | 'CATALOGUE_BASE_COST' = 'CATALOGUE_BASE_COST';
+    // Prices come from the catalogue's tier columns (Pricing Framework workbook), or from the
+    // pricing service when the buyer has configured their own dimensions.
+    //
+    // The previous version started at `unitPrice = Number(product.baseCost)` and only called the
+    // pricing service for FRAME_GLAZED lines — so every RATE_CARD / EXTRUSION_LENGTH / LENGTH_RUN
+    // / FOOTPRINT_FRAME item was sold at baseCost, which is the wholesale cost build-up. Those
+    // lines sold at zero margin. There is now no path by which baseCost becomes a unit price.
+    const cataloguePrice = this.pickTierPrice(
+      {
+        retail: Number(product.retailPrice),
+        trade: Number(product.tradePrice),
+        volume: Number(product.volumePrice),
+      },
+      tier,
+    );
+    let unitPrice = cataloguePrice;
 
-    if (product.subCategory.pricingBasis === 'FRAME_GLAZED') {
+    // Re-price only when the buyer configured dimensions the catalogue does not describe, or
+    // when the line is area-rated and the pricing service can compute it. A custom size must be
+    // priced by the engine; a standard-size standard line already has an authoritative price.
+    const isCustomSize = widthMm !== (product.widthMm ?? 0) || heightMm !== (product.heightMm ?? 0);
+    const pricedByEngine = product.subCategory.pricingBasis === 'FRAME_GLAZED' && isCustomSize;
+
+    let pricedVia: 'PRICING_SERVICE' | 'PRICING_SERVICE_FALLBACK' | 'CATALOGUE_PRICE' = 'CATALOGUE_PRICE';
+    if (pricedByEngine) {
       try {
         const price = await this.configurator.computePrice({
           productId: product.id,
@@ -68,8 +85,17 @@ export class CartService {
         unitPrice = this.pickTierPrice(price, tier);
         pricedVia = 'PRICING_SERVICE';
       } catch {
-        // Falls through to catalogue baseCost; `pricedVia` records the downgrade.
+        // The pricing service is unreachable, so the custom size cannot be priced. Charge the
+        // catalogue price for the standard size rather than the cost: a customer must never pay
+        // less than list because a dependency was down. `pricedVia` records the downgrade.
+        pricedVia = 'PRICING_SERVICE_FALLBACK';
       }
+    }
+
+    // A product with no retail price is unpriced, not free. The CHECK constraint on Product
+    // blocks this at the database, but the guard makes the failure legible if it is ever reached.
+    if (!(unitPrice > 0)) {
+      throw new BadRequestException(`Product ${product.sku} has no price and cannot be ordered`);
     }
 
     const configSnapshot = {
