@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CounterService } from '../../prisma/counter.service';
 import { CartService } from '../cart/cart.service';
 import { AddressesService } from '../addresses/addresses.service';
+import { TradeAccountsService } from '../trade-accounts/trade-accounts.service';
 import { PromotionsService } from '../promotions/promotions.service';
 import { LegalTaxService } from '../legal-tax/legal-tax.service';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -29,6 +30,7 @@ export class OrdersService {
     private readonly counters: CounterService,
     private readonly cart: CartService,
     private readonly addresses: AddressesService,
+    private readonly tradeAccounts: TradeAccountsService,
     private readonly promotions: PromotionsService,
     private readonly legalTax: LegalTaxService,
   ) {}
@@ -168,32 +170,88 @@ export class OrdersService {
   }
 
   /**
-   * Marks an order paid and issues its Tax Invoice. Called by the payment-gateway webhook,
-   * never by the browser — a client asserting "I paid" is not proof of payment.
+   * Marks an order paid and issues its Tax Invoice. Called by the payment-gateway webhook or by
+   * an admin confirming payment, never by the browser — a client asserting "I paid" is not proof
+   * of payment.
+   *
+   * This is also the single point at which trade credit is committed, so both callers
+   * (`OrdersController` and `PaymentsService.initiateTradeTerms`) get the same enforcement and
+   * neither can route around it.
    */
   async confirmPayment(orderId: string, paymentRef: string) {
-    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { user: true },
+    });
     if (!order) throw new NotFoundException(`Order ${orderId} not found`);
+    // Seen outside the transaction for a clear early error; the authoritative check is the
+    // conditional update below, which is what actually prevents a concurrent double-confirm.
     if (order.status !== 'PENDING') {
       throw new BadRequestException(`Order is already ${order.status}`);
     }
 
-    await this.prisma.order.update({
-      where: { id: orderId },
-      data: { status: 'PAYMENT_CONFIRMED', paymentRef },
+    const isTradeTerms = order.paymentMethod === 'TRADE_ACCOUNT_TERMS';
+    const companyId = order.user.companyId;
+    if (isTradeTerms && !companyId) {
+      throw new BadRequestException('Trade account terms require a company trade account');
+    }
+
+    // Everything below is one transaction: the status transition and the credit reservation
+    // commit together or not at all.
+    //
+    // The transition is a conditional update (`WHERE status = PENDING`), not a plain update. When
+    // two callers confirm the same order at once — a gateway webhook retried while the first call
+    // is still in flight, or an admin double-submitting — both read PENDING before either writes.
+    // A plain update would let both through and consume the buyer's credit twice for one order. The
+    // conditional update matches exactly one row under a row lock, so the loser matches zero and
+    // aborts, rolling its reservation back with it.
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.order.updateMany({
+        where: { id: orderId, status: 'PENDING' },
+        data: { status: 'PAYMENT_CONFIRMED', paymentRef },
+      });
+      if (claimed.count === 0) {
+        throw new BadRequestException('Order is already being confirmed');
+      }
+
+      if (isTradeTerms) {
+        // Throws — aborting the transaction, undoing the claim above and leaving the order
+        // PENDING — when the account is unapproved or has no headroom for this order's total.
+        await this.tradeAccounts.consumeCredit(companyId!, Number(order.total), tx);
+      }
     });
+
     const invoice = await this.legalTax.getOrGenerateInvoice(orderId);
     return { order: await this.findOne(orderId), invoice };
   }
 
   async cancel(orderId: string, userId: string) {
-    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { user: true },
+    });
     if (!order) throw new NotFoundException(`Order ${orderId} not found`);
     if (order.userId !== userId) throw new ForbiddenException('Not your order');
     if (!['PENDING', 'PAYMENT_CONFIRMED'].includes(order.status)) {
       throw new BadRequestException('Only unpaid or freshly-paid orders can be cancelled online');
     }
-    return this.prisma.order.update({ where: { id: orderId }, data: { status: 'CANCELLED' } });
+
+    // Releasing the credit and marking the order cancelled are one transaction, for the same
+    // reason as confirmPayment: a crash between the two would either strand the credit (order
+    // cancelled, commitment still held) or invite a second release on retry.
+    return this.prisma.$transaction(async (tx) => {
+      // A confirmed trade-terms order already took credit. Cancelling it must give that credit
+      // back, or the commitment outlives the order and the account wedges itself out of its own
+      // limit. A PENDING order never reserved credit, so there is nothing to release.
+      if (order.status === 'PAYMENT_CONFIRMED' && order.paymentMethod === 'TRADE_ACCOUNT_TERMS') {
+        const companyId = order.user.companyId;
+        if (companyId) {
+          await this.tradeAccounts.releaseCredit(companyId, Number(order.total), tx);
+        }
+      }
+
+      return tx.order.update({ where: { id: orderId }, data: { status: 'CANCELLED' } });
+    });
   }
 
   // ---- Internals ----------------------------------------------------------

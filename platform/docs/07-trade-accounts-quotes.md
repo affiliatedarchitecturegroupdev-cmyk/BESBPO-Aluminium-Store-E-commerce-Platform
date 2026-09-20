@@ -3,8 +3,19 @@
 ## Trade account lifecycle
 1. Buyer applies via `/account/trade/apply` (company name, registration/VAT numbers)
 2. Application queues for manual review (`TradeAccount.approved = false` until reviewed)
-3. On approval, `DiscountTier` unlocks Trade (−12%) or Volume (−20%) pricing automatically
+3. Staff approve via `POST /trade-accounts/:id/approve`, optionally setting `creditLimit` in the
+   same call. Without a way to set the limit at approval, every new account would have to be given
+   one by direct database edit, and an account with no limit can buy without bound.
+4. On approval, `DiscountTier` unlocks Trade (−12%) or Volume (−20%) pricing automatically
    across the whole catalogue and configurator
+
+## Credit limit enforcement
+`creditLimit` is not advisory — it is checked when an order on terms is confirmed, and
+`creditUsed` is incremented at that moment. Cancelling a confirmed order returns the credit.
+See [docs/11-payments.md](11-payments.md#trade-credit-where-the-limit-is-actually-enforced) for
+the atomic-update rationale and the concurrency evidence.
+
+An account whose `creditLimit` is `null` is unlimited; that is distinct from a limit of R0.
 
 ## RFQ / Quote flow
 For work that doesn't fit a simple cart checkout — full curtain-wall elevations, multi-building
