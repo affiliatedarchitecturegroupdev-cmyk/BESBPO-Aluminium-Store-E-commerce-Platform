@@ -1,0 +1,13 @@
+{
+  "name": "aluminium-store-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Storefront end-to-end tests — drives the real Next.js storefront against the real backend and catalogue.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0"
+  }
+}

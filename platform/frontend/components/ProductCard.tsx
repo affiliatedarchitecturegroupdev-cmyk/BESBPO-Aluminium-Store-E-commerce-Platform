@@ -18,7 +18,7 @@ export default function ProductCard({ product }: { product: Product }) {
       <p style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 10.5, color: '#3E6E91', marginTop: 12 }}>{product.sku}</p>
       <p style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>{product.name}</p>
       {product.configuration && <p style={{ fontSize: 12, color: '#5C6773', marginTop: 4 }}>{product.configuration}</p>}
-      <p style={{ fontFamily: 'Space Grotesk, sans-serif', fontWeight: 700, fontSize: 16, marginTop: 10 }}>{formatRand(product.baseCost)}</p>
+      <p style={{ fontFamily: 'Space Grotesk, sans-serif', fontWeight: 700, fontSize: 16, marginTop: 10 }}>{formatRand(product.retailPrice)}</p>
       {product.fulfilmentType !== 'STOCK' && (
         <p style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 10, color: '#C08A4E', marginTop: 6 }}>
           {product.fulfilmentType === 'CMI_PARTNER_NETWORK' ? 'CMI NETWORK' : 'MADE TO ORDER'}

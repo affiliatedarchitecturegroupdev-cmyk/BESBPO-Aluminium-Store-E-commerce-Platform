@@ -62,10 +62,15 @@ export default async function Page({ params }: { params: { sku: string } }) {
           </div>
 
           <div style={{ display: 'flex', gap: 24, marginTop: 24, flexWrap: 'wrap' }}>
-            <Fact label="From" value={formatRand(product.baseCost)} />
+            <Fact label="From (retail)" value={formatRand(product.retailPrice)} />
+            <Fact label="Trade" value={formatRand(product.tradePrice)} />
+            <Fact label="Volume" value={formatRand(product.volumePrice)} />
             <Fact label="Fulfilment" value={product.fulfilmentType.replace(/_/g, ' ')} />
             {product.stockLevel && <Fact label="In stock" value={`${Math.max(product.stockLevel.quantity - product.stockLevel.reserved, 0)}`} />}
           </div>
+          <p style={{ fontSize: 11.5, color: '#8A94A0', marginTop: 10 }}>
+            Trade and volume pricing apply automatically to approved accounts at checkout.
+          </p>
 
           {product.complianceRefs && product.complianceRefs.length > 0 && (
             <section style={{ marginTop: 32 }}>

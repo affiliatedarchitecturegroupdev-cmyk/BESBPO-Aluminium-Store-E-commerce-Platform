@@ -6,6 +6,33 @@ The CMS does not let admins invent new SKUs freely; it imports/syncs from an exp
 of the catalogue workbook (CSV/XLSX upload) and only allows editing of merchandising fields
 (images, descriptions, sort order, active/inactive) plus stock levels.
 
+## How the catalogue is loaded today
+The workbook import is a scripted, out-of-band step — not an admin screen yet:
+
+```
+# Regenerate the committed catalogue from the client's workbook (needs openpyxl)
+python3 platform/scripts/import-catalogue.py
+#   reads   Aluminium-Store-Pricing-Framework-v1.0.xlsx  (repo root)
+#   writes  platform/backend/data/catalogue.json
+# The seed then reads that JSON:
+cd platform/backend && npm run prisma:seed
+```
+
+`catalogue.json` is committed, and it records the SHA-256 of the workbook it came from, so the
+seeded data is reproducible from the exact workbook revision. `prisma/seed.spec.ts` asserts the
+2,147-row count, the SKU format, the taxonomy references, and the price relationships — a corrupt
+import fails CI rather than seeding a half-empty storefront.
+
+Adding the admin-facing sync (the XLSX upload described above) is Phase 5 work; until then the
+workbook is re-imported by running the script and re-seeding.
+
+## Known pricing issue in the workbook
+A flat 20% volume discount applied to markup bands of 18% and 25% puts the volume price of 165
+thin-margin commodity rows (144 extrusion, 21 glazing) at or below the cost build-up. This comes
+from the workbook's own formulas and is reproduced by the pricing service, so it needs a client
+decision rather than a code fix. Retail and trade clear cost on all 2,147 rows. See
+`STATUS.md` → Known gaps.
+
 ## Why not a third-party CMS
 As with Roofsteel and Bricksplaza, a **custom-built admin/CMS** is chosen over Shopify/Strapi/
 Sanity-style third-party tools — the configurator, CMI-routing, and compliance-document

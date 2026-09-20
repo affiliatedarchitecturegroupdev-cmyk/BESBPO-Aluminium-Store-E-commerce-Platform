@@ -72,6 +72,16 @@ model Product {
   fulfilmentType  FulfilmentType
   complianceRefs  ComplianceDoc[]
   baseCost        Decimal      @db.Decimal(12, 2)
+  // The three customer-facing tiers, carried from the Pricing Framework workbook (see
+  // scripts/import-catalogue.py). The platform never derives a displayed price from baseCost:
+  // baseCost is the wholesale cost build-up, and showing it to a shopper publishes our margin.
+  // For standard catalogue lines these are the price; the configurator recomputes them when a
+  // buyer changes dimensions, and the two must agree at the standard size.
+  markupPct       Decimal      @db.Decimal(6, 4)
+  retailPrice     Decimal      @db.Decimal(12, 2)
+  tradePrice      Decimal      @db.Decimal(12, 2)
+  volumePrice     Decimal      @db.Decimal(12, 2)
+  frameClass      String?
   images          ProductImage[]
   stockLevel      StockLevel?
   cartItems       CartItem[]

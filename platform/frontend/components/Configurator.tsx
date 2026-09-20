@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { apiFetch, isSignedIn } from '@/lib/session';
 
 // The platform's centrepiece interaction — see docs/03-configurator-spec.md.
 // Calls POST /api/v1/configurator/validate-size then /api/v1/configurator/price
@@ -44,6 +46,9 @@ export default function Configurator({
   const [sizeValid, setSizeValid] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const router = useRouter();
 
   const selectedFinish = useMemo(
     () => finishes.find((f) => f.id === finishId),
@@ -100,6 +105,37 @@ export default function Configurator({
 
   const displayPrice =
     price && (discountTier === 'TRADE' ? price.trade : discountTier === 'VOLUME' ? price.volume : price.retail);
+
+  // The cart recomputes the price server-side from the same inputs, so the configuration — not
+  // a client-supplied price — is what travels. Signed-out shoppers are sent to sign in first,
+  // because the cart is per-account.
+  async function onAddToCart() {
+    if (!isSignedIn()) {
+      router.push('/login');
+      return;
+    }
+    setAdding(true);
+    setAddError(null);
+    // The tier is not sent: the server derives it from the account (TRADE/VOLUME/RETAIL), so a
+    // client cannot choose its own discount band.
+    const result = await apiFetch('/cart/items', {
+      method: 'POST',
+      body: {
+        productId,
+        quantity: 1,
+        widthMm,
+        heightMm,
+        finishId,
+        glazingPackageId: glazingId,
+      },
+    });
+    setAdding(false);
+    if (!result.ok) {
+      setAddError(result.status === 401 ? 'Please sign in to add to cart.' : result.message);
+      return;
+    }
+    router.push('/cart');
+  }
 
   return (
     <div style={{ border: '1.5px solid #A9B2BD', borderRadius: 14, padding: 24, maxWidth: 480 }}>
@@ -184,6 +220,27 @@ export default function Configurator({
             </span>
           </p>
         )}
+
+        {addError && <p style={{ color: '#B03A32', fontSize: 12.5 }}>{addError}</p>}
+
+        <button
+          type="button"
+          onClick={onAddToCart}
+          disabled={!sizeValid || loading || displayPrice == null || adding}
+          style={{
+            width: '100%',
+            marginTop: 12,
+            padding: 12,
+            background: sizeValid && displayPrice != null ? '#1B2733' : '#A9B2BD',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            fontWeight: 600,
+            cursor: !sizeValid || displayPrice == null || adding ? 'default' : 'pointer',
+          }}
+        >
+          {adding ? 'Adding…' : 'Add to Cart'}
+        </button>
       </div>
     </div>
   );

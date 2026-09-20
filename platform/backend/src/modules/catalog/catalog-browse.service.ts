@@ -118,10 +118,12 @@ export class CatalogBrowseService {
         return { createdAt: 'desc' as const };
       case 'name':
         return { name: 'asc' as const };
+      // Price sorting is on retail, not baseCost: shoppers sort by what they pay, and sorting on
+      // the cost column would order the catalogue by our margin rather than by price.
       case 'price-asc':
-        return { baseCost: 'asc' as const };
+        return { retailPrice: 'asc' as const };
       case 'price-desc':
-        return { baseCost: 'desc' as const };
+        return { retailPrice: 'desc' as const };
       default:
         return { name: 'asc' as const };
     }

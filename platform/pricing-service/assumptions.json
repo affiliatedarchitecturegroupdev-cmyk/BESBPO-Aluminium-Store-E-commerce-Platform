@@ -95,6 +95,7 @@
     "Pergolas": 420,
     "Carports & Canopies": 500
   },
+  "LOUVRE_BLADE_MATERIAL_PER_M2": 320,
   "PANEL_MATERIAL_RATE": {
     "Garage Doors": 380,
     "Louvres & Privacy Screens": 220,
