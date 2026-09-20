@@ -10,6 +10,7 @@ One module = one bounded business concern. Modules live in `platform/backend/src
 | `catalog` | Category/SubCategory/Product read APIs, search/filter, admin writes |
 | `configurator` | Proxies to the FastAPI pricing microservice, validates size/finish/glazing combinations |
 | `cart` | Cart and CartItem CRUD |
+| `addresses` | Per-user delivery address book; ownership-scoped reads/writes (see `36-delivery-addresses.md`) |
 | `orders` | Order lifecycle, status transitions, checkout transaction |
 | `quotes` | RFQ lifecycle |
 | `payments` | PayFast/Lulapay/PayJustNow integration adapters |

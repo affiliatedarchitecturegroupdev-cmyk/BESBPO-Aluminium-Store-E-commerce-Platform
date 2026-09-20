@@ -25,17 +25,17 @@ An unverified ✅ is a claim, not a fact.
 
 | Metric | Value |
 |---|---|
-| Source files (`.ts`/`.tsx`/`.py`/`.prisma`) | 230 |
-| Source lines | ~12,030 |
+| Source files (`.ts`/`.tsx`/`.py`/`.prisma`) | 234 |
+| Source lines | ~12,031 |
 | Prisma models | 60 |
-| API route handlers | 128 |
-| Backend modules | 32 |
+| API route handlers | 132 |
+| Backend modules | 35 |
 | Storefront routes | 39 |
 | Docs | 35 |
 | Migrations | 5 |
-| Unit tests | 61 (43 backend Jest, 18 pricing pytest) |
-| Smoke checks | 51 |
-| Browser e2e tests | 5 (Playwright, `platform/e2e`) |
+| Unit tests | 72 (54 backend Jest, 18 pricing pytest) |
+| Smoke checks | 64 |
+| Browser e2e tests | 6 (Playwright, `platform/e2e`) |
 | Catalogue | 2,147 SKUs / 7 categories / 31 sub-categories |
 
 ## How to verify this file
@@ -75,7 +75,7 @@ Phase definitions live in `docs/16-roadmap.md`.
 - [x] Cart (add/update/remove, stock reservation)
 - [x] **Full 2,147-SKU catalogue** — imported from the workbook by `scripts/import-catalogue.py`
 - [x] Add-to-cart from the product page, priced server-side from the configuration
-- [ ] Street-level delivery address capture on checkout
+- [x] Street-level delivery address capture on checkout (`addresses` module + checkout form)
 - [ ] Gateway hosted-page redirect at checkout
 
 ### Phase 3 — Orders, Payments & Trade Accounts 🟡 In progress
@@ -119,7 +119,8 @@ means they are "wired" only in the sense that they build and their route is regi
 | `catalog` | Reads, filters, SKU lookup, admin writes incl. duplicate/invalid handling | smoke |
 | `configurator` | Sizing intake, delegates to the pricing service | smoke |
 | `cart` | Cart lifecycle, server-side repricing | smoke |
-| `orders` | Checkout transaction, order numbering, concurrent-submit protection, cancel | smoke, spec |
+| `addresses` | Per-user delivery address book; every read/write scoped by owner | smoke, spec |
+| `orders` | Checkout transaction, order numbering, concurrent-submit protection, cancel, delivery-address ownership | smoke, spec |
 | `business-desk` | Company-scoped team/dashboard, company-role guard | smoke |
 | `delivery` | Weight-banded, province-aware delivery quote + fragile surcharge | smoke |
 | `newsletter` | Subscribe; unsubscribe requires a signed token | smoke |
@@ -175,6 +176,7 @@ registered — but nothing proves they behave correctly. Treat them as unverifie
 
 | Date | Change |
 |---|---|
+| 2026-09-19 | Checkout/address/delivery correctness slice. Added the `addresses` module (per-user address book, every read/write scoped by owner, exactly one default per account). Fixed the checkout province list, which had drifted to a hand-copied seven and silently dropped Free State and Northern Cape — a shopper there was charged Gauteng delivery; the list now mirrors the backend enum. Checkout now captures a street address and sends `deliveryAddressId`. Closed two order defects: `deliveryAddressId` was written onto the order without an ownership check (any cuid could attach another account's address), and an omitted province fell through to a zone lookup that matched nothing, pricing delivery at **R0** — i.e. free delivery to anyone who left the field out. Both now fail with 400. |
 | 2026-09-19 | Imported the 2,147-SKU Master Product Catalogue workbook (`scripts/import-catalogue.py`); added retail/trade/volume price columns and tier-aware cart pricing; added add-to-cart to the product page; added a Playwright e2e suite; retargeted the seed integrity tests at `data/catalogue.json`. Found and flagged the workbook's below-cost volume pricing on 165 thin-margin rows. |
 | 2026-09-19 | Added this tracker, the smoke test, Jest/pytest suites and CI. Fixed the missing `FREE_STATE`/`NORTHERN_CAPE` migration and the duplicate `ALS-FIX-0001` SKU. |
 | 2026-09-19 | Render deployability pass: runtime API proxy replacing the build-time rewrite, Dockerfiles for all three services, guard/checkout/newsletter hardening. |

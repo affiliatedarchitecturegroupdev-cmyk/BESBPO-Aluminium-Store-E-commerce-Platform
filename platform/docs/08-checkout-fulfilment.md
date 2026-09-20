@@ -3,6 +3,18 @@
 ## Checkout steps
 1. Cart review (shows Retail/Trade/Volume price per the buyer's tier)
 2. Delivery address + delivery-zone fee calculation (see `09-delivery-courier.md`)
+   - The buyer picks a saved address or, on first checkout, captures one inline. The address is
+     persisted through the `addresses` module (see `36-delivery-addresses.md`) and sent as
+     `deliveryAddressId`.
+   - **The province is required.** It drives the delivery-zone lookup; if it is omitted and no
+     saved address supplies one, the lookup matches no zone and the fee would silently price at
+     **R0** — free delivery to anyone who left the field out. Checkout therefore rejects the order
+     with a 400 rather than accepting a mis-quoted total.
+   - When a saved address is supplied it is the **authority** for the province, and it must belong
+     to the caller — `orders.service.ts` verifies ownership via
+     `AddressesService.findOwned()` before writing `deliveryAddressId`. A client-supplied
+     `deliveryProvince` alongside a saved address cannot override the address's own province, so a
+     tampered payload cannot buy a cheaper zone.
 3. Payment method selection (see `11-payments.md`)
 4. Order confirmation — generates `orderNumber`, attaches applicable `ComplianceDoc` records
 

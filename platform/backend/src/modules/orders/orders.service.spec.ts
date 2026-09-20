@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 
 import { OrdersService } from './orders.service';
 
@@ -15,6 +15,7 @@ function buildService(overrides: {
   prisma?: unknown;
   legalTax?: unknown;
   counters?: unknown;
+  addresses?: unknown;
 } = {}) {
   const prisma = {
     order: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
@@ -26,17 +27,20 @@ function buildService(overrides: {
   const counters = { next: jest.fn().mockResolvedValue(1), ...(overrides.counters as object) };
   const promotions = {};
   const legalTax = { getOrGenerateInvoice: jest.fn(), ...(overrides.legalTax as object) };
+  // Default: the caller owns the address they named. Tests that care override this.
+  const addresses = { findOwned: jest.fn(), ...(overrides.addresses as object) };
   const service = new OrdersService(
     prisma as never,
     counters as never,
     cart as never,
+    addresses as never,
     promotions as never,
     legalTax as never,
   );
-  return { service, prisma, cart, counters, legalTax };
+  return { service, prisma, cart, counters, legalTax, addresses };
 }
 
-const DTO = { paymentMethod: 'EFT' } as never;
+const DTO = { paymentMethod: 'EFT', deliveryProvince: 'GAUTENG' } as never;
 
 describe('OrdersService.checkout', () => {
   it('refuses an empty cart', async () => {
@@ -137,5 +141,91 @@ describe('orders service contract', () => {
 
     await expect(service.checkout('user-1', DTO)).rejects.toThrow(ConflictException);
     expect(txDeleteMany).toHaveBeenCalled();
+  });
+});
+
+describe('OrdersService.checkout delivery address', () => {
+  const cartWithOneItem = {
+    getCart: jest.fn().mockResolvedValue({
+      items: [{ cartId: 'c1', productId: 'p1', quantity: 1, unitPrice: '100', product: { fulfilmentType: 'STOCK', glazingSpec: null } }],
+      subtotal: 100,
+      coupon: null,
+    }),
+  };
+
+  it('refuses a checkout with neither a province nor a saved address', async () => {
+    // Without a province the DeliveryZone lookup finds no zone and the fee silently becomes R0,
+    // i.e. free delivery to anyone who simply omits the field.
+    const { service } = buildService({ cart: cartWithOneItem });
+    await expect(service.checkout('user-1', { paymentMethod: 'EFT' } as never)).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+
+  it('checks that a named delivery address belongs to the caller', async () => {
+    // Previously deliveryAddressId was written straight through: any cuid could be attached and
+    // another account's address read back off the order. findOwned is the gate.
+    const findOwned = jest.fn().mockRejectedValue(new NotFoundException('Address a-other not found'));
+    const { service } = buildService({
+      cart: cartWithOneItem,
+      addresses: { findOwned },
+    });
+
+    await expect(
+      service.checkout('user-1', { paymentMethod: 'EFT', deliveryAddressId: 'a-other' } as never),
+    ).rejects.toThrow(NotFoundException);
+    expect(findOwned).toHaveBeenCalledWith('user-1', 'a-other');
+  });
+
+  it("prices delivery from the saved address's province, not the client-supplied one", async () => {
+    // The address is the authority. A client sending a cheap province alongside an expensive
+    // address must not get the cheap zone.
+    const findOwned = jest.fn().mockResolvedValue({ id: 'a-1', userId: 'user-1', province: 'WESTERN_CAPE' });
+    const findFirst = jest.fn().mockResolvedValue({ baseFee: '250.00', fragileSurchargePct: '0.05' });
+    const { service } = buildService({
+      cart: cartWithOneItem,
+      addresses: { findOwned },
+      prisma: {
+        deliveryZone: { findFirst },
+        $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
+          fn({
+            cartItem: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+            order: { create: jest.fn().mockResolvedValue({ id: 'o1', deliveryFee: 250 }) },
+            coupon: { update: jest.fn() },
+          }),
+        ),
+      },
+    });
+
+    await service.checkout('user-1', {
+      paymentMethod: 'EFT',
+      deliveryAddressId: 'a-1',
+      deliveryProvince: 'GAUTENG',
+    } as never);
+
+    expect(findFirst).toHaveBeenCalledWith({ where: { province: 'WESTERN_CAPE' } });
+  });
+
+  it('stores the verified address id on the order, never the raw client value', async () => {
+    const orderCreate = jest.fn().mockResolvedValue({ id: 'o1' });
+    const { service } = buildService({
+      cart: cartWithOneItem,
+      addresses: { findOwned: jest.fn().mockResolvedValue({ id: 'a-1', province: 'GAUTENG' }) },
+      prisma: {
+        $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => unknown) =>
+          fn({
+            cartItem: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+            order: { create: orderCreate },
+            coupon: { update: jest.fn() },
+          }),
+        ),
+      },
+    });
+
+    await service.checkout('user-1', { paymentMethod: 'EFT', deliveryAddressId: 'a-1' } as never);
+
+    expect(orderCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ deliveryAddressId: 'a-1' }) }),
+    );
   });
 });

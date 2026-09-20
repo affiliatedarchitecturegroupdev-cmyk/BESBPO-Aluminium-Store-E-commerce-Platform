@@ -147,4 +147,79 @@ test.describe('storefront', () => {
     expect([product.tradePrice, product.retailPrice, product.volumePrice].map(Number)).toContain(unitPrice);
     expect(unitPrice).not.toBeCloseTo(Number(product.baseCost), 2);
   });
+
+  test('checkout captures a street address and offers all nine provinces', async ({ page }) => {
+    // Two regressions are covered here.
+    //
+    //   1. The Province list on checkout was a hand-copied array of seven provinces, missing Free
+    //      State and Northern Cape. A shopper in either was silently charged Gauteng delivery.
+    //      The assertion is that the form offers the full set.
+    //   2. There was no street-address capture at all — the order recorded only a province, so
+    //      staff had nothing to dispatch to. The assertion is that an address can be entered and
+    //      the order still completes.
+
+    const res = await page.request.get('/api/v1/catalog/products?take=1');
+    const { items } = (await res.json()) as { items: ApiProduct[] };
+    const product = items[0];
+
+    await page.goto('/login');
+    await page.getByPlaceholder('Email').fill('buyer@example-trade.co.za');
+    await page.getByPlaceholder('Password').fill('ChangeMe!Trade1');
+    await page.getByRole('button', { name: /sign in with email/i }).click();
+    await expect(page).toHaveURL(/\/account/, { timeout: 15_000 });
+
+    await page.goto(`/product/${product.sku}`);
+    const addToCart = page.getByRole('button', { name: /add to cart/i });
+    await expect(addToCart).toBeEnabled({ timeout: 15_000 });
+    await addToCart.click();
+    await expect(page).toHaveURL(/\/cart/, { timeout: 15_000 });
+
+    await page.goto('/checkout');
+
+    // A saved address may survive from an earlier run, in which case the form starts hidden.
+    // Reveal it: the province options only exist inside the form, and leaving it open with empty
+    // `required` fields would block submission anyway.
+    const streetField = page.getByLabel('Street address');
+    if (!(await streetField.isVisible().catch(() => false))) {
+      const toggle = page.getByRole('button', { name: /use a different address/i });
+      if (await toggle.isVisible().catch(() => false)) await toggle.click();
+    }
+    await expect(streetField).toBeVisible({ timeout: 15_000 });
+
+    // Every province the backend enum accepts must be selectable — Free State and Northern Cape
+    // are the two that were dropped.
+    const provinceSelect = page.getByLabel('Province');
+    const options = await provinceSelect.locator('option').allTextContents();
+    for (const required of ['Free State', 'Northern Cape', 'North West']) {
+      expect(options, `checkout is missing the ${required} option`).toContain(required);
+    }
+    expect(options).toHaveLength(9);
+
+    const postcode = String(2000 + Math.floor(Math.random() * 9000));
+    await streetField.fill('12 Voortrekker Road');
+    await page.getByLabel('City').fill('Johannesburg');
+    await page.getByLabel('Postal code').fill(postcode);
+    await provinceSelect.selectOption('FREE_STATE');
+
+    await page.getByRole('button', { name: /place order/i }).click();
+
+    // Free State is the province that used to be unselectable; the order must be accepted and
+    // priced with a real delivery zone rather than falling through to R0.
+    await expect(page).toHaveURL(/\/checkout\/success/, { timeout: 20_000 });
+    await expect(page.getByText(/ALS-/)).toBeVisible({ timeout: 15_000 });
+
+    // The address typed into the form must be what the order actually used. Opening the form
+    // while a saved address stayed selected would have silently ordered to the old address — the
+    // form was displayed but its contents ignored. Read the address book back with the session
+    // token and confirm the Free State address exists.
+    const token = await page.evaluate(() => window.localStorage.getItem('als_access_token'));
+    const addressesRes = await page.request.get('/api/v1/addresses', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(addressesRes.ok()).toBeTruthy();
+    const saved = (await addressesRes.json()) as { line1: string; province: string; postalCode: string }[];
+    const typed = saved.find((a) => a.postalCode === postcode);
+    expect(typed, 'the address entered at checkout was never saved').toBeTruthy();
+    expect(typed!.province).toBe('FREE_STATE');
+  });
 });

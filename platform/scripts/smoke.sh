@@ -262,6 +262,39 @@ check "read cart returns 200" 200 "$S"
 S=$(status PATCH "/cart/items/$CART_ITEM_ID" "$TRADE_TOKEN" '{"quantity":2}')
 check_one_of "update cart line succeeds" "200" "$S" "$(body)"
 
+# ---------------------------------------------------------------- delivery addresses
+echo "addresses"
+S=$(status POST /addresses "$TRADE_TOKEN" '{"line1":"12 Voortrekker Road","city":"Johannesburg","province":"GAUTENG","postalCode":"2001"}')
+check_one_of "an address can be saved" "200 201" "$S" "$(body)"
+ADDRESS_ID=$(body | jq_get "['id']")
+assert_ok "address response carries an id" "$([ -n "$ADDRESS_ID" ] && [ "$ADDRESS_ID" != "None" ] && echo 0 || echo 1)"
+
+S=$(status GET /addresses "$TRADE_TOKEN")
+check "listing addresses returns 200" 200 "$S"
+
+S=$(status POST /addresses "$TRADE_TOKEN" '{"line1":"1 Main Road","city":"Cape Town","province":"NOT_A_PROVINCE","postalCode":"8001"}')
+check "an address with an invalid province returns 400" 400 "$S"
+
+S=$(status POST /addresses "$TRADE_TOKEN" '{"line1":"1 Main Road","city":"Cape Town","province":"WESTERN_CAPE","postalCode":"8"}')
+check "an address with a non-4-digit postal code returns 400" 400 "$S"
+
+S=$(status GET /addresses "")
+check "listing addresses without a token returns 401" 401 "$S"
+
+# Address isolation. The admin token belongs to a different account; it must not be able to edit
+# or delete the trade account's address, and the API answers 404 rather than 403 so that holding
+# a cuid reveals nothing about whether it exists.
+S=$(status PATCH "/addresses/$ADDRESS_ID" "$ADMIN_TOKEN" '{"city":"Hijacked"}')
+check_one_of "another account cannot edit an address it does not own" "403 404" "$S" "$(body)"
+
+S=$(status DELETE "/addresses/$ADDRESS_ID" "$ADMIN_TOKEN")
+check_one_of "another account cannot delete an address it does not own" "403 404" "$S" "$(body)"
+
+# Still intact after the cross-account attempts.
+S=$(status GET /addresses "$TRADE_TOKEN")
+assert_ok "the owner's address survived the cross-account attempts" \
+  "$(body | python3 -c "import sys,json;print(0 if any(a['id']=='$ADDRESS_ID' for a in json.load(sys.stdin)) else 1)")"
+
 # ---------------------------------------------------------------- checkout, incl. double-submit
 echo "checkout"
 # One cart, submitted concurrently. The cart is consumed inside the checkout transaction, so
@@ -306,6 +339,34 @@ check_one_of "Free State province is handled without a 500" "200 201 400" "$S" "
 
 S=$(status POST /orders/checkout "$TRADE_TOKEN" '{"paymentMethod":"EFT","deliveryProvince":"NORTHERN_CAPE"}')
 check_one_of "Northern Cape province is handled without a 500" "200 201 400" "$S" "$(body)"
+
+# A province (or a saved address) is required. Previously an omitted province fell through to a
+# DeliveryZone lookup that matched nothing, pricing delivery at R0 — free delivery for anyone who
+# simply left the field out.
+S=$(status POST /orders/checkout "$TRADE_TOKEN" '{"paymentMethod":"EFT"}')
+check "checkout without a province or address returns 400 (not free delivery)" 400 "$S" "$(body)"
+
+# The address id is the caller's claim, not a fact. It must belong to them. Build a real negative
+# case rather than a bogus id: give the admin a genuine address, put an item in the trade cart,
+# and try to attach the admin's address to the trade account's order. The cart must be non-empty
+# or checkout short-circuits on "Cart is empty" and never reaches the ownership check at all.
+S=$(status POST /addresses "$ADMIN_TOKEN" '{"line1":"1 Admin Way","city":"Pretoria","province":"GAUTENG","postalCode":"0002"}')
+ADMIN_ADDRESS_ID=$(body | jq_get "['id']")
+assert_ok "admin has an address to test cross-account reuse with" \
+  "$([ -n "$ADMIN_ADDRESS_ID" ] && [ "$ADMIN_ADDRESS_ID" != "None" ] && echo 0 || echo 1)"
+
+curl -s -o /dev/null -X POST "$API_BASE/cart/items" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TRADE_TOKEN" -d "{\"productId\":\"$PRODUCT_ID\",\"quantity\":1}" >/dev/null
+
+S=$(status POST /orders/checkout "$TRADE_TOKEN" \
+  "{\"paymentMethod\":\"EFT\",\"deliveryAddressId\":\"$ADMIN_ADDRESS_ID\"}")
+check_one_of "checkout rejects an address owned by another account" "400 403 404" "$S" "$(body)"
+
+# And the positive control: the trade account's own address is accepted, proving the rejection
+# above is the ownership check and not simply a blanket refusal of every address.
+S=$(status POST /orders/checkout "$TRADE_TOKEN" \
+  "{\"paymentMethod\":\"EFT\",\"deliveryAddressId\":\"$ADDRESS_ID\"}")
+check_one_of "checkout accepts the caller's own address" "200 201" "$S" "$(body)"
 
 # ---------------------------------------------------------------- newsletter
 echo "newsletter"
