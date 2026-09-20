@@ -19,6 +19,7 @@ import { LegalTaxModule } from './modules/legal-tax/legal-tax.module';
 import { LogisticsModule } from './modules/logistics/logistics.module';
 import { CommunicationsModule } from './modules/communications/communications.module';
 import { WishlistsModule } from './modules/wishlists/wishlists.module';
+import { AddressesModule } from './modules/addresses/addresses.module';
 import { ProductQuestionsModule } from './modules/product-questions/product-questions.module';
 import { HealthModule } from './modules/health/health.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
@@ -60,6 +61,7 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
     LogisticsModule,
     CommunicationsModule,
     WishlistsModule,
+    AddressesModule,
     ProductQuestionsModule,
     HealthModule,
     ReviewsModule,

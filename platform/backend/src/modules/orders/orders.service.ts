@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { CounterService } from '../../prisma/counter.service';
 import { CartService } from '../cart/cart.service';
+import { AddressesService } from '../addresses/addresses.service';
 import { PromotionsService } from '../promotions/promotions.service';
 import { LegalTaxService } from '../legal-tax/legal-tax.service';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -27,6 +28,7 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly counters: CounterService,
     private readonly cart: CartService,
+    private readonly addresses: AddressesService,
     private readonly promotions: PromotionsService,
     private readonly legalTax: LegalTaxService,
   ) {}
@@ -76,11 +78,27 @@ export class OrdersService {
     const cart = await this.cart.getCart(userId, dto.couponCode);
     if (cart.items.length === 0) throw new BadRequestException('Cart is empty');
 
+    // A delivery address id arriving from the browser is a claim, not a fact. Confirm it belongs
+    // to the caller before writing it onto the order — otherwise any cuid could be attached and
+    // another account's address (name, street, suburb) read back off the order confirmation.
+    const address = dto.deliveryAddressId
+      ? await this.addresses.findOwned(userId, dto.deliveryAddressId)
+      : null;
+
+    // The address is the authoritative source for the province; the free-text field is only a
+    // fallback for callers that have no saved address yet.
+    const province = address?.province ?? (dto.deliveryProvince as never);
+    if (!province) {
+      // Delivery zones are province-keyed. Without one the lookup below returns no zone and the
+      // fee silently becomes R0 — i.e. free delivery to anyone who omits the field. Fail instead.
+      throw new BadRequestException('A delivery province or a saved delivery address is required');
+    }
+
     const subtotal = cart.subtotal;
     const discountAmount = cart.coupon ? Number(cart.coupon.discountAmount) : 0;
     const discountedSubtotal = Math.max(subtotal - discountAmount, 0);
 
-    const { deliveryFee, fragileSurcharge } = await this.deliveryCharges(dto.deliveryProvince, cart.items);
+    const { deliveryFee, fragileSurcharge } = await this.deliveryCharges(province, cart.items);
     const freeShipping = cart.coupon?.freeShipping === true;
     const effectiveDeliveryFee = freeShipping ? 0 : deliveryFee;
 
@@ -120,7 +138,7 @@ export class OrdersService {
           couponId: cart.coupon?.couponId ?? null,
           total,
           paymentMethod: dto.paymentMethod as never,
-          deliveryAddressId: dto.deliveryAddressId ?? null,
+          deliveryAddressId: address?.id ?? null,
           items: {
             create: cart.items.map((i) => ({
               productId: i.productId,
