@@ -4,10 +4,14 @@ export class ApproveTradeAccountDto {
   /**
    * Credit ceiling for the account, in rands.
    *
-   * Optional because an account can be approved before its limit is agreed, and `null` means
-   * "no limit set" rather than zero — see TradeAccountsService.consumeCredit. Supplying it here
-   * is what makes the limit enforceable at all; without a way to set it, every approved account
-   * would have to be edited in the database directly.
+   * Optional: approving an account unlocks TRADE pricing, which is a separate decision from
+   * granting it credit terms. Omitting the limit approves the pricing tier but leaves the account
+   * with **no credit facility** — `TradeAccount.creditLimit` stays null and
+   * `TradeAccountsService.consumeCredit` refuses term orders until a figure is agreed. A null
+   * limit is never read as "unlimited".
+   *
+   * Supplying the limit here is what makes credit enforceable at all; without this field every
+   * limit would have to be written straight into the database.
    */
   @IsOptional()
   @IsNumber()

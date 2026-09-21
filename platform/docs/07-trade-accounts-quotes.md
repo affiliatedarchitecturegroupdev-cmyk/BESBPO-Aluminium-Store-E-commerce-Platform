@@ -15,7 +15,13 @@
 See [docs/11-payments.md](11-payments.md#trade-credit-where-the-limit-is-actually-enforced) for
 the atomic-update rationale and the concurrency evidence.
 
-An account whose `creditLimit` is `null` is unlimited; that is distinct from a limit of R0.
+An account whose `creditLimit` is `null` has **no credit facility** — approving an account
+unlocks its pricing tier, which is a separate decision from granting it terms. A null limit is
+never read as unlimited: `consumeCredit` requires the column to be non-null, so an order on
+terms is refused and the buyer is told to settle by card, EFT or a buy-now-pay-later option.
+This matches what the business desk already reports for the same value
+(`business-desk.service.ts`), and it is distinct from an explicit limit of R0 — which grants a
+facility with no headroom.
 
 ## RFQ / Quote flow
 For work that doesn't fit a simple cart checkout — full curtain-wall elevations, multi-building

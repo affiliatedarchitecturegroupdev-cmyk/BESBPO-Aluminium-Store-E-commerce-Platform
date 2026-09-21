@@ -533,6 +533,69 @@ check "a PAYFAST order cannot be settled on trade terms (400)" 400 "$S" "$(body)
 S=$(status GET /admin/trade-accounts/pending "$TRADE_TOKEN")
 check "pending trade accounts require ADMIN (403 for trade)" 403 "$S"
 
+# --- an approved account with no agreed limit must not get unlimited terms ---
+# `creditLimit IS NULL` used to satisfy the guard's `WHERE`, so approving an account without
+# stating a ceiling granted it credit with no cap at all — and in the same breath the business
+# desk reported "no credit facility is set on this account", because it reads null the opposite
+# way. The UI now always sends a limit, but the API is what must hold the line: this drives the
+# real apply → approve (no limit) → order-on-terms path and expects a refusal.
+#
+# The check runs last because it needs its own account: it deliberately approves without a limit,
+# so it cannot share the seeded one, which the assertions above leave at R150 000.
+#
+# The company name is unique per run. The suite is designed to re-run against a database that is
+# not reset, and matching on a fixed name would pick up a previous run's account — whose owner is
+# a different user — leaving this run's applicant unapproved and failing for the wrong reason.
+echo "trade credit — null limit is a refusal, not an unlimited line"
+NULL_LIMIT_SUFFIX="smoke-null-$RANDOM-$$"
+NULL_LIMIT_EMAIL="$NULL_LIMIT_SUFFIX@example.co.za"
+S=$(status POST /auth/register "" "{\"email\":\"$NULL_LIMIT_EMAIL\",\"name\":\"Smoke Null Limit\",\"password\":\"SmokeTest1\"}")
+check_one_of "a new applicant can register" "200 201" "$S" "$(body)"
+NULL_LIMIT_TOKEN=$(body | jq_get "['accessToken']")
+assert_ok "registration returns an access token" "$([ ${#NULL_LIMIT_TOKEN} -gt 100 ] && echo 0 || echo 1)"
+
+# The apply response carries the account it created, so the id is read straight off it rather
+# than rediscovered by listing — a listing is capped at 50 and would eventually miss this row.
+S=$(status POST /trade-accounts/apply "$NULL_LIMIT_TOKEN" "{\"companyName\":\"Smoke Null Limit Co $NULL_LIMIT_SUFFIX (Pty) Ltd\"}")
+check_one_of "a trade account can be applied for" "200 201" "$S" "$(body)"
+NULL_LIMIT_ACCOUNT_ID=$(body | jq_get "['tradeAccount']['id']")
+assert_ok "the newly applied trade account is identifiable" \
+  "$([ -n "$NULL_LIMIT_ACCOUNT_ID" ] && [ "$NULL_LIMIT_ACCOUNT_ID" != "None" ] && echo 0 || echo 1)"
+
+# Approve with no body at all — exactly what the admin screen used to send.
+S=$(status POST "/trade-accounts/$NULL_LIMIT_ACCOUNT_ID/approve" "$ADMIN_TOKEN" '{}')
+check_one_of "an account can be approved for pricing without stating a limit" "200 201" "$S" "$(body)"
+
+S=$(status GET /business-desk/credit "$NULL_LIMIT_TOKEN")
+NULL_LIMIT_REPORTED=$(body | jq_get "['creditLimit']")
+# jq_get prints via Python, so a JSON null arrives as the string "None".
+check "the business desk reports the account as having no credit facility" "None" "$NULL_LIMIT_REPORTED"
+
+curl -s -o /dev/null -X POST "$API_BASE/cart/items" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $NULL_LIMIT_TOKEN" -d "{\"productId\":\"$PRODUCT_ID\",\"quantity\":1}" >/dev/null
+S=$(status POST /orders/checkout "$NULL_LIMIT_TOKEN" '{"paymentMethod":"TRADE_ACCOUNT_TERMS","deliveryProvince":"GAUTENG"}')
+NULL_LIMIT_ORDER_ID=$(body | jq_get "['id']")
+
+S=$(status POST "/orders/$NULL_LIMIT_ORDER_ID/confirm-payment" "$ADMIN_TOKEN" '{"paymentRef":"smoke-null-limit"}')
+check "confirming a term order on an unlimited-by-null account is refused (400)" 400 "$S" "$(body)"
+
+assert_ok "the refusal names the missing facility rather than an exhausted one" \
+  "$(python3 -c "
+import json
+d=json.load(open('/tmp/smoke_body.json'))
+msg=str(d.get('message',''))
+print(0 if 'no credit facility' in msg.lower() and 'unlimited' not in msg.lower() else 1)
+" 2>/dev/null || echo 1)"
+
+S=$(status GET "/orders/mine" "$NULL_LIMIT_TOKEN")
+assert_ok "the refused order was left unpaid" \
+  "$(python3 -c "
+import json
+orders=json.load(open('/tmp/smoke_body.json'))
+o=[x for x in orders if x['id']=='$NULL_LIMIT_ORDER_ID']
+print(0 if o and o[0]['status']=='PENDING' else 1)
+" 2>/dev/null || echo 1)"
+
 # ---------------------------------------------------------------- summary
 echo
 echo "=== $PASS passed, $FAIL failed ==="

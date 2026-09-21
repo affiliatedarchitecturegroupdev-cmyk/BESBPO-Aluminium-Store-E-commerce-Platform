@@ -72,8 +72,12 @@ export class TradeAccountsService {
    * its limit. Postgres evaluates the `WHERE` and applies the `INCREMENT` under one row lock, so
    * the loser matches no row and is refused. Same reasoning as CounterService's atomic increment.
    *
-   * `creditLimit` null means "no limit set" — that is not the same as a zero limit, and treating
-   * it as zero would silently block every account that was approved without a figure.
+   * `creditLimit` null means "no credit facility" — approving an account unlocks TRADE pricing,
+   * but buying on terms is a separate decision that needs an agreed ceiling. A null limit is
+   * therefore a *refusal*, not an unlimited line: the business desk already reports it to the
+   * buyer as "No credit facility is set on this account. Orders are settled by card, EFT…"
+   * (business-desk.service.ts), so treating the same value as unlimited here let an account
+   * spend without limit while its owner was told it had no facility at all.
    */
   async consumeCredit(companyId: string, amount: number, db: Db = this.prisma) {
     if (!(amount > 0)) return;
@@ -83,21 +87,27 @@ export class TradeAccountsService {
       SET "creditUsed" = "creditUsed" + ${amount}
       WHERE "companyId" = ${companyId}
         AND "approved" = true
-        AND ("creditLimit" IS NULL OR "creditUsed" + ${amount} <= "creditLimit")
+        AND "creditLimit" IS NOT NULL
+        AND "creditUsed" + ${amount} <= "creditLimit"
     `;
 
     if (updated === 0) {
-      // Distinguish "not approved" from "over limit" so the buyer gets an actionable message
-      // rather than a bare rejection. This read is outside the guarded update by necessity —
-      // it only shapes the error, it does not decide anything.
+      // Distinguish "not approved" from "no facility" from "over limit" so the buyer gets an
+      // actionable message rather than a bare rejection. This read is outside the guarded update
+      // by necessity — it only shapes the error, it does not decide anything.
       const account = await db.tradeAccount.findUnique({ where: { companyId } });
       if (!account || !account.approved) {
         throw new BadRequestException('Trade account terms require an approved trade account');
       }
-      const limit = account.creditLimit ? Number(account.creditLimit) : null;
+      if (account.creditLimit == null) {
+        throw new BadRequestException(
+          'This trade account has no credit facility — orders are settled by card, EFT or a buy-now-pay-later option',
+        );
+      }
+      const limit = Number(account.creditLimit);
       throw new BadRequestException(
         `Insufficient trade credit: R${Number(account.creditUsed).toFixed(2)} of ` +
-          `R${limit?.toFixed(2) ?? 'unlimited'} already committed`,
+          `R${limit.toFixed(2)} already committed`,
       );
     }
 
