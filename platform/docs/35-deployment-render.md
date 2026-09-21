@@ -28,6 +28,28 @@ explicitly, so a *default* version means the file was not read.
 Secrets marked `sync: false` are still entered in the dashboard after the blueprint provisions the
 stack — the blueprint creates the services, it does not know the secret values.
 
+## `npm ci --include=dev` is deliberate
+
+Both Node services set `NODE_ENV: production` in this file, and Render applies a service's
+`envVars` **during the build**, not only at runtime. Under `NODE_ENV=production`, `npm ci` omits
+`devDependencies`. The toolchain these builds need is in `devDependencies`:
+
+| Service | Package | Needed by | If omitted |
+|---|---|---|---|
+| API | `@nestjs/cli` | `npm run build` (`nest build`) | `sh: 1: nest: not found` |
+| API | `typescript` | Nest CLI's compiler | same failure |
+| API | `prisma` | `npx prisma generate` | CLI missing — survives only because `@prisma/client` depends on it |
+| Storefront | `typescript` | Next resolves the `@/*` alias through it | `Module not found: Can't resolve '@/lib/session'` |
+
+So the build commands pass `--include=dev` explicitly. Dropping it to "slim the install" breaks
+both builds, and neither error message names the real cause — one is a missing binary, the other
+looks like a broken import path.
+
+The runtime install being lean is a separate question from the build install: the built output
+(`dist/` for the API, `.next/standalone` for the storefront) does not need the dev toolchain to
+run, which is why the Dockerfiles can use `npm ci --omit=dev` in their runtime stages. The Render
+native runtime has no separate build and run phases, so its single install must cover the build.
+
 ## Services
 
 The blueprint declares four resources, all in one region so the internal network is available:

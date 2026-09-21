@@ -45,7 +45,12 @@ services:
     region: frankfurt
     plan: starter
     rootDir: platform/backend
-    buildCommand: npm ci && npx prisma generate && npm run build
+    # `--include=dev` is required, not optional. Render applies a service's `envVars` during the
+    # build as well as at runtime, and this service sets NODE_ENV=production. Under that value
+    # `npm ci` omits devDependencies — and `nest`, `typescript` and `prisma` are all devDependencies
+    # here. The build then dies with `sh: 1: nest: not found`. (`prisma` survives on its own only
+    # because @prisma/client depends on it; the other two do not.)
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
     # Migrations run before the server accepts traffic. `migrate deploy` is idempotent and takes
     # an advisory lock, so this is safe on restart and across instances. It runs here rather than
     # in buildCommand because the build step has no access to the private database URL.
@@ -91,7 +96,11 @@ services:
     region: frankfurt
     plan: starter
     rootDir: platform/frontend
-    buildCommand: npm ci && npm run build
+    # Same reason as the API: NODE_ENV=production is set below and Render applies envVars at build
+    # time, so a bare `npm ci` would omit `typescript`. Next.js resolves the `@/*` path alias
+    # through the TypeScript compiler, so without it the build fails with
+    # `Module not found: Can't resolve '@/lib/session'` rather than anything that names TypeScript.
+    buildCommand: npm ci --include=dev && npm run build
     # `npm run start` is scripts/start-standalone.sh, not `next start`: output:standalone does not
     # support `next start`, and the bundle does not include .next/static or public/ unless they
     # are staged beside it first. The script does that, then runs the supported entry point.
