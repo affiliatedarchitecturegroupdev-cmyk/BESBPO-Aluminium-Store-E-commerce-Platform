@@ -16,28 +16,59 @@ function buildService(overrides: {
   legalTax?: unknown;
   counters?: unknown;
   addresses?: unknown;
+  tradeAccounts?: unknown;
 } = {}) {
+  // confirmPayment claims the order with a conditional updateMany; default it to succeeding so
+  // tests about other behaviour are not forced to stub it.
+  const orderDefaults = {
+    findUnique: jest.fn(),
+    update: jest.fn(),
+    create: jest.fn(),
+    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+  };
   const prisma = {
-    order: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
+    order: orderDefaults,
     deliveryZone: { findFirst: jest.fn().mockResolvedValue(null) },
     $transaction: jest.fn(),
     ...(overrides.prisma as object),
   };
+  // Merge rather than replace `order`, so a test that stubs one method still gets the rest —
+  // replacing it wholesale silently drops `updateMany` and the confirm path throws instead.
+  const orderOverride = overrides.prisma && (overrides.prisma as { order?: object }).order;
+  if (orderOverride) prisma.order = { ...orderDefaults, ...orderOverride };
+  // An interactive transaction passes a client to the callback, and the credit guard has to run
+  // on that client to stay inside the transaction. Stub it by handing the callback `tx`, which is
+  // the same shape as `prisma` unless a test overrides it. The default is deliberately not a
+  // no-op `jest.fn()`: a dropped callback would make confirmPayment look like it succeeded while
+  // never writing the order.
+  if (!(prisma.$transaction as jest.Mock).getMockImplementation()) {
+    (prisma.$transaction as jest.Mock).mockImplementation(
+      async (arg: unknown) =>
+        typeof arg === 'function' ? (arg as (tx: unknown) => unknown)(prisma) : undefined,
+    );
+  }
   const cart = { getCart: jest.fn(), ...(overrides.cart as object) };
   const counters = { next: jest.fn().mockResolvedValue(1), ...(overrides.counters as object) };
   const promotions = {};
   const legalTax = { getOrGenerateInvoice: jest.fn(), ...(overrides.legalTax as object) };
   // Default: the caller owns the address they named. Tests that care override this.
   const addresses = { findOwned: jest.fn(), ...(overrides.addresses as object) };
+  // Default: the account has headroom. Tests that care override this to force a refusal.
+  const tradeAccounts = {
+    consumeCredit: jest.fn(),
+    releaseCredit: jest.fn(),
+    ...(overrides.tradeAccounts as object),
+  };
   const service = new OrdersService(
     prisma as never,
     counters as never,
     cart as never,
     addresses as never,
+    tradeAccounts as never,
     promotions as never,
     legalTax as never,
   );
-  return { service, prisma, cart, counters, legalTax, addresses };
+  return { service, prisma, cart, counters, legalTax, addresses, tradeAccounts };
 }
 
 const DTO = { paymentMethod: 'EFT', deliveryProvince: 'GAUTENG' } as never;
@@ -69,7 +100,7 @@ describe('OrdersService.confirmPayment', () => {
     const { service, prisma, legalTax } = buildService({
       prisma: {
         order: {
-          findUnique: jest.fn().mockResolvedValue({ id: 'o1', status: 'PENDING' }),
+          findUnique: jest.fn().mockResolvedValue({ id: 'o1', status: 'PENDING', user: { companyId: null } }),
           update: jest.fn().mockResolvedValue({}),
         },
       },
@@ -80,11 +111,137 @@ describe('OrdersService.confirmPayment', () => {
 
     await service.confirmPayment('o1', 'payfast-ref-123');
 
-    expect(prisma.order.update).toHaveBeenCalledWith({
-      where: { id: 'o1' },
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'o1', status: 'PENDING' },
       data: { status: 'PAYMENT_CONFIRMED', paymentRef: 'payfast-ref-123' },
     });
     expect(legalTax.getOrGenerateInvoice).toHaveBeenCalledWith('o1');
+  });
+
+  it('refuses a second confirm that lost the race, without consuming credit twice', async () => {
+    // Two concurrent confirms both read PENDING before either writes. The conditional update is
+    // what serialises them: the loser matches no row and aborts before reserving credit, so one
+    // order cannot consume the buyer's headroom twice.
+    const { service, tradeAccounts } = buildService({
+      prisma: {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'o1',
+            status: 'PENDING',
+            paymentMethod: 'TRADE_ACCOUNT_TERMS',
+            total: 2500,
+            user: { companyId: 'c1' },
+          }),
+          // The other caller already flipped it, so this caller's conditional update matches nothing.
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+      },
+    });
+
+    await expect(service.confirmPayment('o1', 'ref')).rejects.toThrow(BadRequestException);
+    expect(tradeAccounts.consumeCredit).not.toHaveBeenCalled();
+  });
+
+  it('consumes trade credit in the same transaction as the status write', async () => {
+    // The defect this covers: creditUsed was shown on the business desk but never incremented, so
+    // an approved account could buy without limit. Confirmation is where the commitment is made.
+    //
+    // Splitting the reservation from the status write would be a money bug: if the reservation
+    // commits and the status write fails, the buyer's headroom is spent while the order stays
+    // PENDING, and a retry reserves the same amount again because the PENDING guard still passes.
+    // The same transaction client must reach both, so the reservation rolls back with it.
+    const { service, prisma, tradeAccounts } = buildService({
+      prisma: {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'o1',
+            status: 'PENDING',
+            paymentMethod: 'TRADE_ACCOUNT_TERMS',
+            total: 2500,
+            user: { companyId: 'c1' },
+          }),
+          update: jest.fn().mockResolvedValue({}),
+        },
+      },
+      legalTax: { getOrGenerateInvoice: jest.fn().mockResolvedValue({ id: 'inv-1' }) },
+    });
+    jest.spyOn(service, 'findOne').mockResolvedValue({ id: 'o1' } as never);
+
+    await service.confirmPayment('o1', 'ref');
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(tradeAccounts.consumeCredit).toHaveBeenCalledWith('c1', 2500, prisma);
+  });
+
+  it('leaves the order unpaid when the account is over its credit limit', async () => {
+    // The refusal must happen before the status write: if the order were marked paid first and
+    // the credit check then failed, the buyer would hold goods the account cannot cover.
+    const { service, prisma, tradeAccounts } = buildService({
+      prisma: {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'o1',
+            status: 'PENDING',
+            paymentMethod: 'TRADE_ACCOUNT_TERMS',
+            total: 999999,
+            user: { companyId: 'c1' },
+          }),
+          update: jest.fn().mockResolvedValue({}),
+        },
+      },
+      tradeAccounts: {
+        consumeCredit: jest.fn().mockRejectedValue(new BadRequestException('Insufficient trade credit')),
+      },
+    });
+
+    await expect(service.confirmPayment('o1', 'ref')).rejects.toThrow(BadRequestException);
+    expect(prisma.order.update).not.toHaveBeenCalled();
+  });
+
+  it('does not touch credit for a non-trade-terms order', async () => {
+    // PayFast money is not a credit advance; consuming credit here would wrongly reduce headroom.
+    const { service, tradeAccounts } = buildService({
+      prisma: {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'o1',
+            status: 'PENDING',
+            paymentMethod: 'PAYFAST',
+            total: 2500,
+            user: { companyId: 'c1' },
+          }),
+          update: jest.fn().mockResolvedValue({}),
+        },
+      },
+      legalTax: { getOrGenerateInvoice: jest.fn().mockResolvedValue({ id: 'inv-1' }) },
+    });
+    jest.spyOn(service, 'findOne').mockResolvedValue({ id: 'o1' } as never);
+
+    await service.confirmPayment('o1', 'ref');
+
+    expect(tradeAccounts.consumeCredit).not.toHaveBeenCalled();
+  });
+
+  it('refuses trade terms for a buyer with no company account', async () => {
+    // A retail user has no TradeAccount, so there is nothing to draw against.
+    const { service, tradeAccounts } = buildService({
+      prisma: {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'o1',
+            status: 'PENDING',
+            paymentMethod: 'TRADE_ACCOUNT_TERMS',
+            total: 100,
+            user: { companyId: null },
+          }),
+          update: jest.fn().mockResolvedValue({}),
+        },
+      },
+    });
+
+    await expect(service.confirmPayment('o1', 'ref')).rejects.toThrow(BadRequestException);
+    expect(tradeAccounts.consumeCredit).not.toHaveBeenCalled();
   });
 });
 
@@ -115,6 +272,76 @@ describe('OrdersService.cancel', () => {
     });
     await service.cancel('o1', 'owner');
     expect(update).toHaveBeenCalledWith({ where: { id: 'o1' }, data: { status: 'CANCELLED' } });
+  });
+
+  it('releases credit when cancelling a confirmed trade-terms order', async () => {
+    // Cancelling must hand the commitment back. Without this the order is gone but its credit
+    // is not, so repeated cancellations permanently eat the account's headroom.
+    const { service, tradeAccounts } = buildService({
+      prisma: {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'o1',
+            userId: 'owner',
+            status: 'PAYMENT_CONFIRMED',
+            paymentMethod: 'TRADE_ACCOUNT_TERMS',
+            total: 4200,
+            user: { companyId: 'c1' },
+          }),
+          update: jest.fn().mockResolvedValue({ id: 'o1', status: 'CANCELLED' }),
+        },
+      },
+    });
+
+    await service.cancel('o1', 'owner');
+
+    expect(tradeAccounts.releaseCredit).toHaveBeenCalledWith('c1', 4200, expect.anything());
+  });
+
+  it('releases nothing when cancelling an unpaid trade-terms order', async () => {
+    // PENDING means credit was never consumed, so releasing here would inflate the buyer's
+    // headroom above the limit they were actually granted.
+    const { service, tradeAccounts } = buildService({
+      prisma: {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'o1',
+            userId: 'owner',
+            status: 'PENDING',
+            paymentMethod: 'TRADE_ACCOUNT_TERMS',
+            total: 4200,
+            user: { companyId: 'c1' },
+          }),
+          update: jest.fn().mockResolvedValue({ id: 'o1', status: 'CANCELLED' }),
+        },
+      },
+    });
+
+    await service.cancel('o1', 'owner');
+
+    expect(tradeAccounts.releaseCredit).not.toHaveBeenCalled();
+  });
+
+  it('releases nothing when cancelling a confirmed PayFast order', async () => {
+    const { service, tradeAccounts } = buildService({
+      prisma: {
+        order: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'o1',
+            userId: 'owner',
+            status: 'PAYMENT_CONFIRMED',
+            paymentMethod: 'PAYFAST',
+            total: 4200,
+            user: { companyId: 'c1' },
+          }),
+          update: jest.fn().mockResolvedValue({ id: 'o1', status: 'CANCELLED' }),
+        },
+      },
+    });
+
+    await service.cancel('o1', 'owner');
+
+    expect(tradeAccounts.releaseCredit).not.toHaveBeenCalled();
   });
 });
 

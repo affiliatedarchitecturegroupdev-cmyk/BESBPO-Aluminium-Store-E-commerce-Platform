@@ -398,6 +398,138 @@ check_one_of "delivery quote handles Free State (no 500)" "200 201" "$S" "$(body
 S=$(status GET /trade-accounts)
 check "trade-account listing requires auth (401)" 401 "$S"
 
+# ---------------------------------------------------------------- trade credit enforcement
+# Credit was previously display-only: `creditUsed` was rendered on the business desk but never
+# incremented, so an approved account could order without limit. These assertions exercise the
+# guard through HTTP only, against whatever credit the seeded account currently has.
+echo "trade credit"
+S=$(status GET /business-desk/credit "$TRADE_TOKEN")
+check "credit position requires auth and returns 200" 200 "$S" "$(body)"
+CREDIT_USED_BEFORE=$(body | jq_get "['creditUsed']")
+
+S=$(status GET /trade-accounts "$ADMIN_TOKEN")
+check "admin can list trade accounts" 200 "$S"
+TRADE_ACCOUNT_ID=$(body | python3 -c "
+import sys,json
+accts=json.load(sys.stdin)
+match=[a for a in accts if a.get('company',{}).get('name')=='Example Fabricators (Pty) Ltd']
+print(match[0]['id'] if match else '')
+" 2>/dev/null)
+assert_ok "the trade account used by smoke test is identifiable" \
+  "$([ -n "$TRADE_ACCOUNT_ID" ] && echo 0 || echo 1)"
+
+# A generous limit so the happy path can be observed. Before this endpoint accepted a limit
+# there was no way to set one over HTTP at all, which is part of why enforcement stayed inert.
+S=$(status POST "/trade-accounts/$TRADE_ACCOUNT_ID/approve" "$ADMIN_TOKEN" '{"creditLimit":1000000}')
+check_one_of "admin can set a credit limit on approval" "200 201" "$S" "$(body)"
+
+# --- positive path: a confirmed trade-terms order must actually consume credit ---
+curl -s -o /dev/null -X POST "$API_BASE/cart/items" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TRADE_TOKEN" -d "{\"productId\":\"$PRODUCT_ID\",\"quantity\":1}" >/dev/null
+S=$(status POST /orders/checkout "$TRADE_TOKEN" '{"paymentMethod":"TRADE_ACCOUNT_TERMS","deliveryProvince":"GAUTENG"}')
+check_one_of "a trade-terms order can be placed" "200 201" "$S" "$(body)"
+CREDIT_ORDER_ID=$(body | jq_get "['id']")
+CREDIT_ORDER_TOTAL=$(body | jq_get "['total']")
+
+S=$(status POST "/orders/$CREDIT_ORDER_ID/confirm-payment" "$ADMIN_TOKEN" '{"paymentRef":"smoke-credit-ok"}')
+check_one_of "a trade order within its limit is confirmed" "200 201" "$S" "$(body)"
+
+S=$(status GET /business-desk/credit "$TRADE_TOKEN")
+CREDIT_USED_AFTER_CONFIRM=$(body | jq_get "['creditUsed']")
+assert_ok "confirming a trade order consumed credit equal to the order total" \
+  "$(python3 -c "print(0 if abs((float('$CREDIT_USED_AFTER_CONFIRM') - float('$CREDIT_USED_BEFORE')) - float('$CREDIT_ORDER_TOTAL')) < 0.01 else 1)" 2>/dev/null || echo 1)"
+
+# --- negative path: over-limit confirmation must be refused and consume nothing ---
+S=$(status POST "/trade-accounts/$TRADE_ACCOUNT_ID/approve" "$ADMIN_TOKEN" '{"creditLimit":1}')
+check_one_of "limit can be tightened to force a refusal" "200 201" "$S" "$(body)"
+
+curl -s -o /dev/null -X POST "$API_BASE/cart/items" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TRADE_TOKEN" -d "{\"productId\":\"$PRODUCT_ID\",\"quantity\":1}" >/dev/null
+S=$(status POST /orders/checkout "$TRADE_TOKEN" '{"paymentMethod":"TRADE_ACCOUNT_TERMS","deliveryProvince":"GAUTENG"}')
+OVER_LIMIT_ORDER_ID=$(body | jq_get "['id']")
+
+S=$(status POST "/orders/$OVER_LIMIT_ORDER_ID/confirm-payment" "$ADMIN_TOKEN" '{"paymentRef":"smoke-over-limit"}')
+check "confirming a trade order beyond its limit returns 400" 400 "$S" "$(body)"
+
+S=$(status GET /business-desk/credit "$TRADE_TOKEN")
+CREDIT_USED_AFTER_REFUSAL=$(body | jq_get "['creditUsed']")
+assert_ok "a refused confirmation consumed no credit" \
+  "$(python3 -c "print(0 if abs(float('$CREDIT_USED_AFTER_REFUSAL') - float('$CREDIT_USED_AFTER_CONFIRM')) < 0.01 else 1)" 2>/dev/null || echo 1)"
+
+S=$(status GET "/orders/mine" "$TRADE_TOKEN")
+assert_ok "the over-limit order was left unpaid" \
+  "$(python3 -c "
+import json
+orders=json.load(open('/tmp/smoke_body.json'))
+o=[x for x in orders if x['id']=='$OVER_LIMIT_ORDER_ID']
+print(0 if o and o[0]['status']=='PENDING' else 1)
+" 2>/dev/null || echo 1)"
+
+# --- concurrent confirmation of one order must consume credit exactly once ---
+# Two confirmations can read PENDING before either writes (a retried webhook, a double-submitted
+# admin form). The status transition is a conditional update, so exactly one caller wins and only
+# that one reserves credit. A claim without this would consume the buyer's headroom N times.
+# The previous step tightened the limit to R1 to force a refusal. Restore headroom so this order
+# can be placed and confirmed at all — the race being tested is about concurrency, not the limit.
+S=$(status POST "/trade-accounts/$TRADE_ACCOUNT_ID/approve" "$ADMIN_TOKEN" '{"creditLimit":1000000}')
+check_one_of "headroom restored for the concurrent-confirm check" "200 201" "$S" "$(body)"
+
+curl -s -o /dev/null -X POST "$API_BASE/cart/items" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TRADE_TOKEN" -d "{\"productId\":\"$PRODUCT_ID\",\"quantity\":1}" >/dev/null
+S=$(status POST /orders/checkout "$TRADE_TOKEN" '{"paymentMethod":"TRADE_ACCOUNT_TERMS","deliveryProvince":"GAUTENG"}')
+RACE_ORDER_ID=$(body | jq_get "['id']")
+RACE_ORDER_TOTAL=$(body | jq_get "['total']")
+
+S=$(status GET /business-desk/credit "$TRADE_TOKEN")
+CREDIT_BEFORE_RACE=$(body | jq_get "['creditUsed']")
+
+for i in 1 2 3 4 5; do
+  curl -s -o /dev/null -w '%{http_code}' -X POST "$API_BASE/orders/$RACE_ORDER_ID/confirm-payment" \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -d "{\"paymentRef\":\"smoke-race-$i\"}" > "/tmp/smoke_confirm_$i" &
+done
+wait
+
+RACE_WON=0
+for i in 1 2 3 4 5; do
+  case "$(cat "/tmp/smoke_confirm_$i")" in
+    201|200) RACE_WON=$((RACE_WON + 1)) ;;
+  esac
+done
+check "exactly one of 5 concurrent confirmations won" 1 "$RACE_WON"
+
+S=$(status GET /business-desk/credit "$TRADE_TOKEN")
+CREDIT_AFTER_RACE=$(body | jq_get "['creditUsed']")
+assert_ok "a 5-way confirm race consumed credit exactly once" \
+  "$(python3 -c "print(0 if abs((float('$CREDIT_AFTER_RACE') - float('$CREDIT_BEFORE_RACE')) - float('$RACE_ORDER_TOTAL')) < 0.01 else 1)" 2>/dev/null || echo 1)"
+
+# Release it again so the cancel-release assertion below starts from a known balance.
+S=$(status POST "/orders/$RACE_ORDER_ID/cancel" "$TRADE_TOKEN")
+check_one_of "the race order can be cancelled" "200 201" "$S" "$(body)"
+
+# --- cancelling a confirmed trade-terms order must give the credit back ---
+S=$(status POST "/orders/$CREDIT_ORDER_ID/cancel" "$TRADE_TOKEN")
+check_one_of "the buyer can cancel their confirmed trade order" "200 201" "$S" "$(body)"
+
+S=$(status GET /business-desk/credit "$TRADE_TOKEN")
+CREDIT_USED_AFTER_CANCEL=$(body | jq_get "['creditUsed']")
+assert_ok "cancelling a confirmed trade order released its credit" \
+  "$(python3 -c "print(0 if abs(float('$CREDIT_USED_AFTER_CANCEL') - float('$CREDIT_USED_BEFORE')) < 0.01 else 1)" 2>/dev/null || echo 1)"
+
+# Leave the account at a sane limit for any later run rather than the R1 used to force the refusal.
+S=$(status POST "/trade-accounts/$TRADE_ACCOUNT_ID/approve" "$ADMIN_TOKEN" '{"creditLimit":150000}')
+check_one_of "credit limit restored after the enforcement checks" "200 201" "$S" "$(body)"
+
+# A payment method mismatch must be refused: settling a PAYFAST order through the trade-terms
+# path would mark it paid while skipping the credit check, because confirmPayment decides
+# whether to consume credit from the order's own paymentMethod.
+curl -s -o /dev/null -X POST "$API_BASE/cart/items" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TRADE_TOKEN" -d "{\"productId\":\"$PRODUCT_ID\",\"quantity\":1}" >/dev/null
+S=$(status POST /orders/checkout "$TRADE_TOKEN" '{"paymentMethod":"PAYFAST","deliveryProvince":"GAUTENG"}')
+PAYFAST_ORDER_ID=$(body | jq_get "['id']")
+S=$(status POST /payments/initiate "$TRADE_TOKEN" "{\"orderId\":\"$PAYFAST_ORDER_ID\",\"method\":\"TRADE_ACCOUNT_TERMS\"}")
+check "a PAYFAST order cannot be settled on trade terms (400)" 400 "$S" "$(body)"
+
 S=$(status GET /admin/trade-accounts/pending "$TRADE_TOKEN")
 check "pending trade accounts require ADMIN (403 for trade)" 403 "$S"
 

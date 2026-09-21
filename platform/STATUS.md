@@ -25,16 +25,16 @@ An unverified ✅ is a claim, not a fact.
 
 | Metric | Value |
 |---|---|
-| Source files (`.ts`/`.tsx`/`.py`/`.prisma`) | 234 |
-| Source lines | ~12,031 |
+| Source files (`.ts`/`.tsx`/`.py`/`.prisma`) | 235 |
+| Source lines | ~12,540 |
 | Prisma models | 60 |
 | API route handlers | 132 |
 | Backend modules | 35 |
 | Storefront routes | 39 |
-| Docs | 35 |
+| Docs | 36 |
 | Migrations | 5 |
-| Unit tests | 72 (54 backend Jest, 18 pricing pytest) |
-| Smoke checks | 64 |
+| Unit tests | 87 (69 backend Jest, 18 pricing pytest) |
+| Smoke checks | 83 |
 | Browser e2e tests | 6 (Playwright, `platform/e2e`) |
 | Catalogue | 2,147 SKUs / 7 categories / 31 sub-categories |
 
@@ -124,7 +124,7 @@ means they are "wired" only in the sense that they build and their route is regi
 | `business-desk` | Company-scoped team/dashboard, company-role guard | smoke |
 | `delivery` | Weight-banded, province-aware delivery quote + fragile surcharge | smoke |
 | `newsletter` | Subscribe; unsubscribe requires a signed token | smoke |
-| `trade-accounts` | Application/approval; auth required | smoke (guard only) |
+| `trade-accounts` | Application/approval (with optional `creditLimit`); auth required | smoke, spec |
 | `compliance-docs` | Document listing | smoke (list only) |
 | `cmi-routing` | Partner candidate list | smoke (list only) |
 
@@ -141,7 +141,7 @@ registered — but nothing proves they behave correctly. Treat them as unverifie
 
 | Module | What works | What is missing |
 |---|---|---|
-| `payments` | Method dispatch, order ownership check, trade-terms eligibility gating | Gateway calls build a bare `redirectUrl` with no signature and no credential use. **No webhook handler, so no payment can be confirmed.** |
+| `payments` | Method dispatch, order ownership check, method-mismatch rejection, trade-terms eligibility gating; trade-terms settlement delegates to `OrdersService.confirmPayment`, so it cannot skip the credit check | Gateway calls build a bare `redirectUrl` with no signature and no credential use. **No webhook handler, so no payment can be confirmed.** |
 | `communications` | Call sites and interfaces are in place | All senders are `TODO(phase-2)`: WhatsApp, SMS (Clickatell/BulkSMS), transactional email (Postmark/SendGrid/SES). Nothing is sent today. |
 | `ai-agent` | Endpoint, DTOs, grounding contract | Returns a placeholder; the Claude call and pgvector retrieval are `TODO(phase-2)`, explicitly not faked. |
 | `catalog` (writes) | Validated DTOs, admin create/update, FK and conflict errors mapped; full workbook import via `scripts/import-catalogue.py` | In-app *re-sync* of a changed workbook is still a manual, out-of-band script run. |
@@ -176,6 +176,7 @@ registered — but nothing proves they behave correctly. Treat them as unverifie
 
 | Date | Change |
 |---|---|
+| 2026-09-20 | **Trade credit is now enforced and consumed.** `creditUsed` was displayed on the business desk but never incremented, and no code compared an order against `creditLimit` — an approved trade account could order without limit. Credit is now committed in `OrdersService.confirmPayment` (the single writer of `PAYMENT_CONFIRMED`) via one guarded `UPDATE ... WHERE creditUsed + n <= creditLimit`, so the check and the increment cannot be split by a concurrent order; refused orders stay `PENDING` and consume nothing. Cancelling a confirmed trade-terms order returns the credit. The reservation and the status transition share one transaction, and the transition is a conditional update so a retried webhook or double-submitted form cannot confirm the same order twice or reserve credit twice for it. `POST /payments/initiate` for trade terms now delegates to `confirmPayment` instead of writing the status itself, and settling an order by a method other than the one it was placed with is rejected (a `PAYFAST` order settled on trade terms would otherwise have skipped the credit check). `POST /trade-accounts/:id/approve` accepts an optional `creditLimit`; previously no HTTP route could set one at all. Verified against Postgres: exactly 2 of 3 concurrent R60 000 commitments succeed against a R150 000 limit, and 5 concurrent confirmations of one order yield one success, one invoice and one commitment. |
 | 2026-09-19 | Checkout/address/delivery correctness slice. Added the `addresses` module (per-user address book, every read/write scoped by owner, exactly one default per account). Fixed the checkout province list, which had drifted to a hand-copied seven and silently dropped Free State and Northern Cape — a shopper there was charged Gauteng delivery; the list now mirrors the backend enum. Checkout now captures a street address and sends `deliveryAddressId`. Closed two order defects: `deliveryAddressId` was written onto the order without an ownership check (any cuid could attach another account's address), and an omitted province fell through to a zone lookup that matched nothing, pricing delivery at **R0** — i.e. free delivery to anyone who left the field out. Both now fail with 400. |
 | 2026-09-19 | Imported the 2,147-SKU Master Product Catalogue workbook (`scripts/import-catalogue.py`); added retail/trade/volume price columns and tier-aware cart pricing; added add-to-cart to the product page; added a Playwright e2e suite; retargeted the seed integrity tests at `data/catalogue.json`. Found and flagged the workbook's below-cost volume pricing on 165 thin-margin rows. |
 | 2026-09-19 | Added this tracker, the smoke test, Jest/pytest suites and CI. Fixed the missing `FREE_STATE`/`NORTHERN_CAPE` migration and the duplicate `ALS-FIX-0001` SKU. |

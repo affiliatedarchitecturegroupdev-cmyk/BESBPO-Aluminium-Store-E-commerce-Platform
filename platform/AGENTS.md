@@ -95,3 +95,29 @@ An unverified ✅ in `STATUS.md` is a claim, not a fact. If nothing tests it, it
 
 A new module ships with a corresponding `docs/NN-module-name.md` guideline doc — this repo has
 never shipped a module without one, and that's a rule, not a coincidence.
+## Financial-invariant changes (credit, payments, invoices)
+
+Anything that moves money — trade credit, payment confirmation, invoice issuance — needs the
+concurrency question answered explicitly, not just the happy path. The bar this repo now holds
+itself to, established on PR #5 (trade-credit enforcement):
+
+- **Check-and-write must be one statement.** If a rule reads a value, decides on it, then writes,
+  two concurrent requests both read the old value and both commit. Use a guarded
+  `UPDATE ... WHERE <rule>` (see `TradeAccountsService.consumeCredit`, `CounterService`) and treat
+  "0 rows matched" as the refusal. Never `findUnique` → compare in JS → `update`.
+- **A state transition must be conditional.** `UPDATE ... WHERE status = 'PENDING'`, not a plain
+  update guarded by a value read outside the transaction. Otherwise a retried webhook or a
+  double-submitted admin form transitions the same row twice, and any side effect attached to the
+  transition (a credit commitment, an invoice) happens twice.
+- **Side effects belong in the same transaction as the state change.** Committing credit in a
+  separate statement from the status write leaves a window where the retry guard still passes.
+- **One writer per state.** `PAYMENT_CONFIRMED` has exactly one writer (`OrdersService.confirmPayment`).
+  A second writer that skips the enforcement is how the limit came to be unenforced; if a new
+  caller needs to settle an order, it delegates rather than writing the status itself.
+- **Prove it against Postgres, not just in Jest.** Concurrency is a claim about row locks, which a
+  mocked Prisma cannot test. `scripts/smoke.sh` fires N simultaneous requests against the real
+  database and asserts exactly one wins — see the concurrent-confirm check. Add that check, not a
+  unit test that stubs `$transaction`.
+
+A money bug here is silent and cumulative (an unenforced limit, a double-committed credit), so it
+will not show up as a failing test unless one is written for it deliberately.

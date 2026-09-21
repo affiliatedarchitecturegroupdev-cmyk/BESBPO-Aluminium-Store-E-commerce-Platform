@@ -22,7 +22,7 @@ One module = one bounded business concern. Modules live in `platform/backend/src
 
 | Module | Responsibility |
 |---|---|
-| `trade-accounts` | Trade account application/approval, credit limits |
+| `trade-accounts` | Trade account application/approval, credit limits (`approve` accepts an optional `creditLimit`; `consumeCredit`/`releaseCredit` back `OrdersService` credit enforcement) |
 | `business-desk` | Trade buyer dashboard aggregation, team/company-role administration |
 | `cmi-routing` | Partner matching, routing job trigger, public partner directory |
 

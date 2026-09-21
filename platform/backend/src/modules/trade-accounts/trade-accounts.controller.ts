@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nest
 import type { Request } from 'express';
 import { TradeAccountsService } from './trade-accounts.service';
 import { ApplyTradeAccountDto } from './dto/apply-trade-account.dto';
+import { ApproveTradeAccountDto } from './dto/approve-trade-account.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../admin/roles.guard';
 import { Roles } from '../admin/roles.decorator';
@@ -33,7 +34,7 @@ export class TradeAccountsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN')
   @Post(':id/approve')
-  approve(@Param('id') id: string) {
-    return this.service.approve(id);
+  approve(@Param('id') id: string, @Body() dto: ApproveTradeAccountDto) {
+    return this.service.approve(id, dto.creditLimit);
   }
 }
