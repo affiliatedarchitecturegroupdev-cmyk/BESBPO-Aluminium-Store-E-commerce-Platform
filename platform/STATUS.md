@@ -7,7 +7,7 @@ in the same PR as any change to module completeness — a module that lands or r
 leave this file stale. `docs/16-roadmap.md` remains the phase plan (the *what* and *why*);
 this file is the tracker (the *how far along*).
 
-Last verified: 2026-09-19 · Branch: `main` · Deploy target: Render (`render.yaml`)
+Last verified: 2026-09-21 · Branch: `main` · Deploy target: Render (`render.yaml`)
 
 ## Legend
 
@@ -104,7 +104,7 @@ Phase definitions live in `docs/16-roadmap.md`.
 
 ## Module register
 
-Verification is honest about coverage. Of the 32 backend modules, **13 are exercised by the smoke
+Verification is honest about coverage. Of the 33 backend modules, **14 are exercised by the smoke
 test**, the guards are unit-tested, and the rest compile and are routed but have no test — which
 means they are "wired" only in the sense that they build and their route is registered. Read the
 "Verified by" column literally.
