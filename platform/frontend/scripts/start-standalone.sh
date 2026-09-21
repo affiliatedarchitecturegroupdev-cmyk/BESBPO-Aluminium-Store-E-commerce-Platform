@@ -23,4 +23,13 @@ if [ -d public ]; then
 fi
 
 # Exec so the server is PID 1 and receives the platform's stop signal directly.
+#
+# The standalone server binds to `process.env.HOSTNAME || '0.0.0.0'`. Containers normally set
+# HOSTNAME to the container's own hostname, which resolves to its internal IP, so the server comes
+# up listening on that address alone and the platform's health check — which dials the container
+# from outside — cannot reach it. (Locally this looks like localhost:PORT refusing the connection
+# while http://$HOSTNAME:PORT answers.) Point it at every interface, as the Dockerfile already
+# does with `ENV HOSTNAME=0.0.0.0`.
+export HOSTNAME=0.0.0.0
+
 exec node .next/standalone/server.js

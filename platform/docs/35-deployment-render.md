@@ -3,6 +3,31 @@
 `render.yaml` at the repository root is the source of truth. Render is the
 target platform for this division; the Group's Coolify-on-EC2 standard does not apply here.
 
+## Deploy from the Blueprint, not as a standalone Web Service
+
+Create the resources with **New → Blueprint** and point it at this repository. Do *not* create the
+API or storefront with **New → Web Service** and then paste the build command in by hand.
+
+The distinction matters because `render.yaml` carries three things a hand-made service does not,
+and each fails in a way that does not name its cause:
+
+| Blueprint field | If absent | How it looks |
+|---|---|---|
+| `rootDir: platform/frontend` | Render builds the repository root | `npm error enoent Could not read package.json: /opt/render/project/src/package.json` — there is no root `package.json`, the app is in `platform/` |
+| `NODE_VERSION: 20.18.0` | Render uses its default (currently Node 24) | Builds or runs against a Node the app was never tested on; Prisma and Next.js are the likely breakages |
+| `fromService` / `fromDatabase` | Nothing wires `BACKEND_ORIGIN`, `PRICING_SERVICE_URL`, `DATABASE_URL` | The API boots with no database URL and the storefront proxies to an undefined host |
+
+A hand-made service also defaults its build command to `npm install && npm run build`, which is
+what produces the `package.json` error above when the root directory is left at the repository
+root. The blueprint uses `npm ci` against the committed lockfiles instead.
+
+**Symptom → cause.** A build log that begins `==> Using Node.js version <n> (default)` is proof
+the service is not attached to this blueprint: every Node service here pins `NODE_VERSION`
+explicitly, so a *default* version means the file was not read.
+
+Secrets marked `sync: false` are still entered in the dashboard after the blueprint provisions the
+stack — the blueprint creates the services, it does not know the secret values.
+
 ## Services
 
 The blueprint declares four resources, all in one region so the internal network is available:
@@ -75,6 +100,15 @@ the Dockerfile, so it needs the same staging done at start time: `npm run start`
 `scripts/start-standalone.sh`, which copies those two trees into `.next/standalone/` and then execs
 `node .next/standalone/server.js`. This matters because Next.js warns that `next start` does not
 support standalone output, and the bundle on its own serves the HTML but 404s every static asset.
+
+That script also exports `HOSTNAME=0.0.0.0` before exec'ing. The generated `server.js` binds to
+`process.env.HOSTNAME || '0.0.0.0'`, and Render sets `HOSTNAME` to the instance's own hostname —
+which resolves to the instance's internal IP, not to every interface. Without the override the
+storefront comes up listening on that one address, so a `curl` from inside the instance against
+`localhost:$PORT` is refused while `http://$HOSTNAME:$PORT` answers, and the platform's health
+check cannot reach the port. The Dockerfile already pins the same value with
+`ENV HOSTNAME=0.0.0.0`; the native-runtime path had been relying on the default and so never had
+the value set.
 
 The backend image installs `openssl` in both stages. Prisma selects its query-engine binary at
 `prisma generate` time by probing for OpenSSL. The slim image ships `libssl3` but no `openssl`
