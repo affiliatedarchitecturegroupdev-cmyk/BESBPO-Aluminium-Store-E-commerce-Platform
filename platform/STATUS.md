@@ -25,17 +25,17 @@ An unverified ✅ is a claim, not a fact.
 
 | Metric | Value |
 |---|---|
-| Source files (`.ts`/`.tsx`/`.py`/`.prisma`) | 235 |
-| Source lines | ~12,540 |
+| Source files (`.ts`/`.tsx`/`.py`/`.prisma`) | 240 |
+| Source lines | ~13,460 |
 | Prisma models | 60 |
-| API route handlers | 132 |
+| API route handlers | 133 |
 | Backend modules | 35 |
 | Storefront routes | 39 |
 | Docs | 36 |
-| Migrations | 5 |
-| Unit tests | 87 (69 backend Jest, 18 pricing pytest) |
-| Smoke checks | 92 |
-| Browser e2e tests | 6 (Playwright, `platform/e2e`) |
+| Migrations | 6 |
+| Unit tests | 96 (78 backend Jest, 18 pricing pytest) |
+| Smoke checks | 97 |
+| Browser e2e tests | 7 (Playwright, `platform/e2e`) |
 | Catalogue | 2,147 SKUs / 7 categories / 31 sub-categories |
 
 ## How to verify this file
@@ -75,6 +75,7 @@ Phase definitions live in `docs/16-roadmap.md`.
 - [x] Cart (add/update/remove, stock reservation)
 - [x] **Full 2,147-SKU catalogue** — imported from the workbook by `scripts/import-catalogue.py`
 - [x] Add-to-cart from the product page, priced server-side from the configuration
+- [x] **Clearance shelf** — homepage "Clearance Sale" carousel (spec §7.1) with a stored markdown
 - [x] Street-level delivery address capture on checkout (`addresses` module + checkout form)
 - [ ] Gateway hosted-page redirect at checkout
 
@@ -116,9 +117,9 @@ means they are "wired" only in the sense that they build and their route is regi
 | `health` | Liveness + database check; reports the DB as down rather than pretending | smoke |
 | `auth` | Register, login, JWT issuance | smoke, spec |
 | `admin` | Admin surface; role guard (class-level `@Roles`) | smoke, spec |
-| `catalog` | Reads, filters, SKU lookup, admin writes incl. duplicate/invalid handling | smoke |
+| `catalog` | Reads, filters, SKU lookup, clearance shelf, admin writes incl. duplicate/invalid handling | smoke, e2e |
 | `configurator` | Sizing intake, delegates to the pricing service | smoke |
-| `cart` | Cart lifecycle, server-side repricing | smoke |
+| `cart` | Cart lifecycle, server-side repricing, clearance markdown | smoke, spec |
 | `addresses` | Per-user delivery address book; every read/write scoped by owner | smoke, spec |
 | `orders` | Checkout transaction, order numbering, concurrent-submit protection, cancel, delivery-address ownership | smoke, spec |
 | `business-desk` | Company-scoped team/dashboard, company-role guard | smoke |
@@ -176,6 +177,8 @@ registered — but nothing proves they behave correctly. Treat them as unverifie
 
 | Date | Change |
 |---|---|
+| 2026-09-21 | **Fixed a self-inflicted flake in the checkout e2e — the order silently never left the browser.** The test drew its postcode as `2000 + floor(random * 9000)`, a range of 2000–10999, so roughly one run in nine produced a five-digit value. The postal field legitimately enforces South African four-digit codes with `pattern="\d{4}"`, so native validation rejected the field and the submit event never fired: no `/orders/checkout` request was made at all, the page stayed on `/checkout` with no error text, and a retry failed identically (native validation is deterministic). Confirmed by instrumenting the browser during a failing run — the only events were `click` followed by `invalid:INPUT:Please match the requested format` — and by reproducing the same failure on the unmodified baseline, which rules out the clearance work as a cause. The generator now stays within 1000–9999. Verified by 15 consecutive full-suite runs, all green, where the previous rate was about two failures per ten. |
+| 2026-09-21 | **Added the homepage "Clearance Sale" carousel — the last missing section of the 18-section homepage stack (spec §7.1).** The section had no data behind it: `Product` had no clearance concept, so nothing could be advertised as reduced. Clearance is now an explicit stored markdown (`clearancePrice` + optional `clearanceEndsAt`), not a computed discount — clearing stock is a merchandising decision about specific lines, whereas a percentage would re-price Retail, Trade and Volume together and shift the workbook-derived tier pricing the catalogue depends on. A `CHECK` constraint keeps a markdown positive and strictly below retail, so it can never be used to raise a price or to show a struck-through "was" that is not actually higher than the "now". `GET /catalog/clearance` powers the shelf and filters the expiry window in the database; `CartService` charges the markdown ahead of the tier price (it does not stack with Trade/Volume) and checks expiry at charge time, so what a buyer pays cannot drift from what the shelf advertised. Verified end-to-end against Postgres: the shelf renders four seeded STOCK lines with struck-through retail, a trade buyer is charged R404.04 for a line whose trade price is R547.01, an expired markdown falls back to the tier price, and the check constraint rejects a markdown at or above retail. Covered by `cart.service.spec.ts` (6 assertions incl. the expiry rule in both directions), a new smoke section, and a Playwright check that both the sale price and the struck-through retail render. |
 | 2026-09-21 | **A null `creditLimit` granted unlimited trade credit.** `consumeCredit`'s guard read `("creditLimit" IS NULL OR "creditUsed" + n <= "creditLimit")`, so approving an account without stating a ceiling passed unconditionally — while `business-desk.service.ts` reported the *same* value to the buyer as "No credit facility is set on this account", leaving the two readings of one column in direct contradiction. The null branch is gone: the guard now requires `creditLimit IS NOT NULL`, so a null limit is a refusal, and the error names the missing facility rather than implying an exhausted one. The admin approval screen never sent a limit at all (it posted an empty body), so it now takes a required credit-limit field and validates it before sending — staff who mean to grant terms must state a ceiling. Verified against Postgres by driving the real apply → approve-with-no-limit → order-on-terms path: the confirmation is refused, the order stays `PENDING`, and no credit is consumed. |
 | 2026-09-21 | **Deploy fix: `npm ci` dropped the build toolchain on Render.** Both Node services set `NODE_ENV: production`, and Render applies a service's `envVars` at build time, not only at runtime. `npm ci` under that value omits `devDependencies` — but `@nestjs/cli`, `typescript` and `prisma` are all `devDependencies` here, so the API build died with `sh: 1: nest: not found` and the storefront build with `Module not found: Can't resolve '@/lib/session'` (Next resolves the `@/*` alias through TypeScript, which was absent). Both build commands now pass `--include=dev`, reproduced locally against the exact `buildCommand` strings. Also fixed the storefront binding on the native runtime: Next's generated `server.js` listens on `process.env.HOSTNAME \|\| '0.0.0.0'`, and Render sets `HOSTNAME` to the instance hostname, so `scripts/start-standalone.sh` bound the server to one internal address and the health check could not reach it; it now exports `HOSTNAME=0.0.0.0`, matching the Dockerfile's `ENV`. `docs/35-deployment-render.md` records all three, including that the stack must be created via **New → Blueprint** — a hand-made Web Service skips `rootDir`, which is why the reported failure was `Could not read package.json` at the repository root. |
 | 2026-09-21 | **Deploy fix: storefront bound to the instance hostname, not every interface.** Next.js's generated `server.js` listens on `process.env.HOSTNAME \|\| '0.0.0.0'`. Render sets `HOSTNAME` to the instance hostname, which resolves to its internal IP, so `scripts/start-standalone.sh` brought the storefront up on that one address and the platform health check could not reach the port. The script now exports `HOSTNAME=0.0.0.0`, matching what the Dockerfile already pinned with `ENV HOSTNAME=0.0.0.0`. Confirmed locally: before the change `curl http://localhost:$PORT` was refused while `http://$HOSTNAME:$PORT` returned 200; after it, both return 200 and static assets serve. `docs/35-deployment-render.md` now also states that the stack must be created with **New → Blueprint** — deploying a hand-made Web Service skips `rootDir: platform/frontend` and fails at the repository root with `Could not read package.json`, which is what a Render build log showing a *default* Node version indicates. |

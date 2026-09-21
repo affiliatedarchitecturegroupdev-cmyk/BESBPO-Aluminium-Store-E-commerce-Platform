@@ -25,6 +25,7 @@ type ApiProduct = {
   retailPrice: string | number;
   tradePrice: string | number;
   volumePrice: string | number;
+  clearancePrice?: string | number | null;
   widthMm: number | null;
   heightMm: number | null;
 };
@@ -59,6 +60,29 @@ test.describe('storefront', () => {
     // The decisive assertion: the cost build-up must not be rendered anywhere.
     for (const p of items) {
       expect(html, `cost price for ${p.sku} leaked onto the homepage`).not.toMatch(pricePattern(p.baseCost));
+    }
+  });
+
+  test('the clearance carousel shows the markdown, not the retail it replaced', async ({ page, request }) => {
+    const res = await request.get('/api/v1/catalog/clearance?take=8');
+    expect(res.ok()).toBeTruthy();
+    const { items } = (await res.json()) as { items: ApiProduct[] };
+    test.skip(items.length === 0, 'no clearance lines are seeded in this environment');
+
+    await page.goto('/');
+
+    const html = await page.content();
+    expect(html).toContain('Clearance Sale');
+
+    // Both figures must appear: a clearance card shows the sale price and strikes through the
+    // retail it came off. Asserting only the sale price would pass on a card that had quietly
+    // dropped the "was" price and stopped showing the shopper what they are saving.
+    for (const p of items.slice(0, 4)) {
+      const clearance = Number(p.clearancePrice);
+      expect(html, `${p.sku} clearance price missing from the homepage`).toMatch(pricePattern(clearance));
+      expect(html, `${p.sku} struck-through retail price missing`).toMatch(pricePattern(p.retailPrice));
+      // The markdown is a real reduction, so the two figures must differ.
+      expect(clearance).toBeLessThan(Number(p.retailPrice));
     }
   });
 
@@ -195,7 +219,10 @@ test.describe('storefront', () => {
     }
     expect(options).toHaveLength(9);
 
-    const postcode = String(2000 + Math.floor(Math.random() * 9000));
+    // SA postal codes are exactly four digits and the field enforces that with pattern="\d{4}".
+    // The range must stay inside 1000–9999: a five-digit draw fails native validation, the submit
+    // never fires, and the order silently never reaches the API.
+    const postcode = String(1000 + Math.floor(Math.random() * 9000));
     await streetField.fill('12 Voortrekker Road');
     await page.getByLabel('City').fill('Johannesburg');
     await page.getByLabel('Postal code').fill(postcode);

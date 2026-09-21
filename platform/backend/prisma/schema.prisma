@@ -81,6 +81,13 @@ model Product {
   retailPrice     Decimal      @db.Decimal(12, 2)
   tradePrice      Decimal      @db.Decimal(12, 2)
   volumePrice     Decimal      @db.Decimal(12, 2)
+  // Clearance is an explicit merchandising markdown, not a computed discount: staff set the
+  // sale price (and optionally an end date) on specific stock lines. Deriving it from a
+  // percentage would re-price the whole tier grid, which is not what clearing stock means.
+  // The CHECK constraint keeps a clearance price positive and strictly below retail, so a
+  // markdown can never be used to raise a price.
+  clearancePrice  Decimal?     @db.Decimal(12, 2)
+  clearanceEndsAt DateTime?
   frameClass      String?
   images          ProductImage[]
   stockLevel      StockLevel?
@@ -97,6 +104,9 @@ model Product {
 
   @@index([subCategoryId])
   @@index([sku])
+  // The homepage clearance query filters on a non-null clearancePrice, so an index on that
+  // column keeps the section a key lookup rather than a scan of 2,147 rows.
+  @@index([clearancePrice])
 }
 
 enum UnitOfSale {

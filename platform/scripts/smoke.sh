@@ -596,6 +596,33 @@ o=[x for x in orders if x['id']=='$NULL_LIMIT_ORDER_ID']
 print(0 if o and o[0]['status']=='PENDING' else 1)
 " 2>/dev/null || echo 1)"
 
+# ---------------------------------------------------------------- clearance
+# The homepage "Clearance Sale" carousel is a spec section, and the price a shopper is charged
+# has to match the price the section advertises. These assertions pin the two together against a
+# real database: the markdown is below retail, and the cart charges the advertised figure rather
+# than the buyer's tier price. The expiry rule is pinned in cart.service.spec.ts, where a date can
+# be set on the fixture, rather than here — this suite must not rewrite catalogue rows.
+echo "clearance"
+S=$(status GET "/catalog/clearance?take=8")
+check "clearance listing returns 200" 200 "$S"
+CLEARANCE_SKU=$(body | jq_get "['items'][0]['sku']")
+CLEARANCE_RETAIL=$(body | jq_get "['items'][0]['retailPrice']")
+CLEARANCE_PRICE=$(body | jq_get "['items'][0]['clearancePrice']")
+CLEARANCE_ID=$(body | jq_get "['items'][0]['id']")
+assert_ok "the clearance shelf advertises at least one line" \
+  "$([ -n "$CLEARANCE_SKU" ] && [ "$CLEARANCE_SKU" != "None" ] && echo 0 || echo 1)"
+
+assert_ok "the clearance price is below the retail price it replaced" \
+  "$(python3 -c "print(0 if float('$CLEARANCE_PRICE') < float('$CLEARANCE_RETAIL') else 1)" 2>/dev/null || echo 1)"
+
+S=$(status POST /cart/items "$TRADE_TOKEN" "{\"productId\":\"$CLEARANCE_ID\",\"quantity\":1}")
+check_one_of "a clearance line can be added to the cart" "200 201" "$S" "$(body)"
+CART_CLEARANCE_PRICE=$(body | jq_get "['unitPrice']")
+# Compared as numbers, not strings: the API may return "1253.04" or 1253.04 depending on the
+# JSON encoder, and a string comparison would pass a value that merely looks similar.
+assert_ok "the cart charges the advertised clearance price, not the tier price" \
+  "$(python3 -c "print(0 if abs(float('$CART_CLEARANCE_PRICE') - float('$CLEARANCE_PRICE')) < 0.005 else 1)" 2>/dev/null || echo 1)"
+
 # ---------------------------------------------------------------- summary
 echo
 echo "=== $PASS passed, $FAIL failed ==="
