@@ -182,4 +182,40 @@ describe('seed data integrity', () => {
     const uncovered = PROVINCES.filter((p) => !used.has(p));
     expect(uncovered).toEqual([]);
   });
+
+  it('refuses to seed production without the seed passwords, before writing anything', () => {
+    // Both requirements are asserted at the top of `main`, ahead of the catalogue writes.
+    const guard = seed.indexOf('await assertProductionSeedConfig()');
+    const firstWrite = seed.indexOf('prisma.category.upsert');
+    expect(guard).toBeGreaterThan(-1);
+    expect(firstWrite).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(firstWrite);
+  });
+
+  it('names every missing seed password in one message rather than failing on the first', () => {
+    // The check is a filter over both keys, so the error lists all of them. Aborting after the
+    // catalogue is written leaves a half-seeded database; failing here leaves it untouched.
+    expect(seed).toMatch(/!admin && !process\.env\.SEED_ADMIN_PASSWORD/);
+    expect(seed).toMatch(/!trade && !process\.env\.SEED_TRADE_PASSWORD/);
+  });
+
+  it('requires a seed password only while its account does not exist', () => {
+    // Both user upserts are `update: {}`, so on an already-seeded database the password is never
+    // read. Demanding it unconditionally would fail every later deploy over a value it would not
+    // use — which is what took the API service down.
+    const guard = seed.slice(seed.indexOf('async function assertProductionSeedConfig'));
+    expect(guard).toMatch(/user\.findUnique/);
+    expect(seed).toMatch(/const existingAdmin = await prisma\.user\.findUnique/);
+    expect(seed).toMatch(/const existingTrade = await prisma\.user\.findUnique/);
+  });
+
+  it('does not read a production password unconditionally', () => {
+    // The only call sites are the create paths, reached after the guard has confirmed the secret
+    // is present. A top-level read would abort a redeploy against an already-seeded database.
+    const occurrences = seed.match(/requireSeedPassword\('SEED_ADMIN_PASSWORD'/g) ?? [];
+    expect(occurrences.length).toBeLessThanOrEqual(2);
+    for (const line of seed.split('\n').filter((l) => l.includes("requireSeedPassword('SEED_ADMIN_PASSWORD'"))) {
+      expect(line).not.toMatch(/^\s*const adminPassword/);
+    }
+  });
 });
