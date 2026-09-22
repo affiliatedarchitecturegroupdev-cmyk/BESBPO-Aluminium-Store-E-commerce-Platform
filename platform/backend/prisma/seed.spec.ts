@@ -182,4 +182,19 @@ describe('seed data integrity', () => {
     const uncovered = PROVINCES.filter((p) => !used.has(p));
     expect(uncovered).toEqual([]);
   });
+
+  it('refuses to seed production without the seed passwords, before writing anything', () => {
+    // Both requirements are asserted at the top of `main`, ahead of the catalogue writes.
+    const guard = seed.indexOf('assertProductionSeedConfig()');
+    const firstWrite = seed.indexOf('prisma.category.upsert');
+    expect(guard).toBeGreaterThan(-1);
+    expect(firstWrite).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(firstWrite);
+  });
+
+  it('names every missing seed password in one message rather than failing on the first', () => {
+    // The check is a filter over both keys, so the error lists all of them. Aborting after the
+    // catalogue is written leaves a half-seeded database; failing here leaves it untouched.
+    expect(seed).toMatch(/\['SEED_ADMIN_PASSWORD', 'SEED_TRADE_PASSWORD'\]\.filter/);
+  });
 });

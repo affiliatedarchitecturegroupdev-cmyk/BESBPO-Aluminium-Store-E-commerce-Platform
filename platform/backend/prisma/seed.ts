@@ -157,7 +157,25 @@ function requireSeedPassword(envKey: string, devDefault: string): string {
   return devDefault;
 }
 
+// Both production-only checks run before the first write, not at the point each password is
+// used. The password check used to sit three hundred lines into `main`, after the catalogue had
+// been written, so a deploy missing the secret aborted with a half-seeded database: the
+// storefront then rendered products the rest of the seed had not yet reached (no clearance
+// lines, no CMS copy), and the failed deploy made it look like the catalogue import was at
+// fault. Failing before the first write leaves the database untouched and the error names the
+// missing variable.
+function assertProductionSeedConfig() {
+  if (process.env.NODE_ENV !== 'production') return;
+  const missing = ['SEED_ADMIN_PASSWORD', 'SEED_TRADE_PASSWORD'].filter((k) => !process.env[k]);
+  if (missing.length > 0) {
+    throw new Error(
+      `${missing.join(', ')} must be set when NODE_ENV=production — the development defaults are published in this repository`,
+    );
+  }
+}
+
 async function main() {
+  assertProductionSeedConfig();
   console.log(`Seeding catalogue from ${CATALOGUE.source.workbook} (sha256 ${CATALOGUE.source.sha256.slice(0, 16)}…)…`);
   console.log('Seeding catalogue taxonomy…');
   const subCategoryIds = new Map<string, string>();

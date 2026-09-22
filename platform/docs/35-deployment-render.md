@@ -164,6 +164,22 @@ The development defaults used otherwise are published in this public repository,
 refuses to run under `NODE_ENV=production` without them — otherwise they would become the live
 admin and trade credentials on an internet-facing store.
 
+**If they are missing, the API deploy fails, and the failure looks like a catalogue problem.**
+The check used to sit three hundred lines into the seed, after the catalogue had already been
+written, so the deploy aborted against a half-seeded database: products existed but clearance
+lines, CMS copy and merchandising rows did not, leaving the storefront rendering a catalogue
+with missing sections. The check now runs before the first write, so a missing secret leaves the
+database untouched and the error names both variables in one message:
+
+```
+Error: SEED_ADMIN_PASSWORD, SEED_TRADE_PASSWORD must be set when NODE_ENV=production —
+the development defaults are published in this repository
+```
+
+Set both in the Render dashboard (they are `sync: false`, so they are never committed) and
+redeploy. The API has no `/api/v1/health` until its deploy completes, so a failing API deploy
+also shows as **502** on every API route while the storefront, which does not seed, deploys fine.
+
 ## An unhealthy API blanks the storefront, and the storefront caches the result
 
 The homepage and other catalogue pages are statically prerendered with `revalidate = 60`. When
