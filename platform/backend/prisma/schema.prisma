@@ -22,7 +22,7 @@ model Category {
   name          String        @unique
   slug          String        @unique
   description   String?
-  iconKey       String?       // maps to frontend icon set (windowpane-grid family)
+  iconKey       String? // maps to frontend icon set (windowpane-grid family)
   sortOrder     Int           @default(0)
   subCategories SubCategory[]
   createdAt     DateTime      @default(now())
@@ -30,15 +30,15 @@ model Category {
 }
 
 model SubCategory {
-  id          String    @id @default(cuid())
-  category    Category  @relation(fields: [categoryId], references: [id])
-  categoryId  String
-  name        String
-  slug        String    @unique
+  id           String       @id @default(cuid())
+  category     Category     @relation(fields: [categoryId], references: [id])
+  categoryId   String
+  name         String
+  slug         String       @unique
   pricingBasis PricingBasis
-  products    Product[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  products     Product[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
   @@index([categoryId])
 }
@@ -54,39 +54,39 @@ enum PricingBasis {
 }
 
 model Product {
-  id              String       @id @default(cuid())
-  sku             String       @unique
-  subCategory     SubCategory  @relation(fields: [subCategoryId], references: [id])
+  id              String            @id @default(cuid())
+  sku             String            @unique
+  subCategory     SubCategory       @relation(fields: [subCategoryId], references: [id])
   subCategoryId   String
   name            String
   configuration   String
   standardSize    String?
   widthMm         Int?
   heightMm        Int?
-  lengthM         Decimal?     @db.Decimal(8, 2)
-  finish          Finish?      @relation(fields: [finishId], references: [id])
+  lengthM         Decimal?          @db.Decimal(8, 2)
+  finish          Finish?           @relation(fields: [finishId], references: [id])
   finishId        String?
   glazingSpec     String?
   unitOfSale      UnitOfSale
   segments        Segment[]
   fulfilmentType  FulfilmentType
   complianceRefs  ComplianceDoc[]
-  baseCost        Decimal      @db.Decimal(12, 2)
+  baseCost        Decimal           @db.Decimal(12, 2)
   // The three customer-facing tiers, carried from the Pricing Framework workbook (see
   // scripts/import-catalogue.py). The platform never derives a displayed price from baseCost:
   // baseCost is the wholesale cost build-up, and showing it to a shopper publishes our margin.
   // For standard catalogue lines these are the price; the configurator recomputes them when a
   // buyer changes dimensions, and the two must agree at the standard size.
-  markupPct       Decimal      @db.Decimal(6, 4)
-  retailPrice     Decimal      @db.Decimal(12, 2)
-  tradePrice      Decimal      @db.Decimal(12, 2)
-  volumePrice     Decimal      @db.Decimal(12, 2)
+  markupPct       Decimal           @db.Decimal(6, 4)
+  retailPrice     Decimal           @db.Decimal(12, 2)
+  tradePrice      Decimal           @db.Decimal(12, 2)
+  volumePrice     Decimal           @db.Decimal(12, 2)
   // Clearance is an explicit merchandising markdown, not a computed discount: staff set the
   // sale price (and optionally an end date) on specific stock lines. Deriving it from a
   // percentage would re-price the whole tier grid, which is not what clearing stock means.
   // The CHECK constraint keeps a clearance price positive and strictly below retail, so a
   // markdown can never be used to raise a price.
-  clearancePrice  Decimal?     @db.Decimal(12, 2)
+  clearancePrice  Decimal?          @db.Decimal(12, 2)
   clearanceEndsAt DateTime?
   frameClass      String?
   images          ProductImage[]
@@ -97,16 +97,28 @@ model Product {
   wishlistItems   WishlistItem[]
   questions       ProductQuestion[]
   bundleItems     BundleItem[]
-  active          Boolean      @default(true)
-  feedExcluded    Boolean      @default(false) // opt out of Meta/Google/TikTok product feed sync
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  // Merchandising (docs/38-merchandising-sections.md)
+  featuredAs      FeaturedProduct?
+  collectionItems CollectionItem[]
+  dailyDeals      DailyDeal[]
+  // Self-referencing "goes with" pairs. Two named relations because Prisma cannot tell which
+  // side a single unnamed one means — see ProductPairing.
+  pairingsFrom    ProductPairing[]  @relation("PairingSource")
+  pairingsTo      ProductPairing[]  @relation("PairingTarget")
+  active          Boolean           @default(true)
+  feedExcluded    Boolean           @default(false) // opt out of Meta/Google/TikTok product feed sync
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
 
   @@index([subCategoryId])
   @@index([sku])
   // The homepage clearance query filters on a non-null clearancePrice, so an index on that
   // column keeps the section a key lookup rather than a scan of 2,147 rows.
   @@index([clearancePrice])
+  // Shop by Finish filters the catalogue on a finish; Budget Shop sorts by retail. Both are
+  // browsable entry points, so neither should scan the full 2,147 rows.
+  @@index([finishId])
+  @@index([retailPrice])
 }
 
 enum UnitOfSale {
@@ -131,56 +143,60 @@ enum Segment {
 }
 
 model Finish {
-  id          String    @id @default(cuid())
-  name        String    @unique   // Natural Anodised, Satin White, Charcoal Grey, Bronze Anodised, Graphite Black
+  id          String       @id @default(cuid())
+  name        String       @unique // Natural Anodised, Satin White, Charcoal Grey, Bronze Anodised, Graphite Black
   hex         String
-  costPerM2   Decimal   @db.Decimal(10, 2)
-  qualicoat   Boolean   @default(false)
-  qualanod    Boolean   @default(false)
+  costPerM2   Decimal      @db.Decimal(10, 2)
+  qualicoat   Boolean      @default(false)
+  qualanod    Boolean      @default(false)
   products    Product[]
+  // "Shop by Finish" blurb, editable per finish; the section falls back to a generated line.
+  description String?
+  sortOrder   Int          @default(0)
+  collections Collection[]
 }
 
 model GlazingPackage {
-  id            String   @id @default(cuid())
-  name          String   @unique   // Standard Single-Glazed, IGU Double-Glazed, Laminated Safety, etc.
-  upgradeRateM2 Decimal  @db.Decimal(10, 2)
-  nrcsApproved  Boolean  @default(true)  // VC 9003
+  id            String  @id @default(cuid())
+  name          String  @unique // Standard Single-Glazed, IGU Double-Glazed, Laminated Safety, etc.
+  upgradeRateM2 Decimal @db.Decimal(10, 2)
+  nrcsApproved  Boolean @default(true) // VC 9003
   description   String?
 }
 
 model ProductImage {
-  id        String   @id @default(cuid())
-  product   Product  @relation(fields: [productId], references: [id])
+  id        String  @id @default(cuid())
+  product   Product @relation(fields: [productId], references: [id])
   productId String
   url       String
   altText   String
-  sortOrder Int      @default(0)
+  sortOrder Int     @default(0)
 }
 
 model StockLevel {
-  id          String   @id @default(cuid())
-  product     Product  @relation(fields: [productId], references: [id])
-  productId   String   @unique
-  quantity    Int      @default(0)
-  reserved    Int      @default(0)
-  reorderAt   Int      @default(5)
-  location    Location? @relation(fields: [locationId], references: [id])
-  locationId  String?
-  updatedAt   DateTime @updatedAt
+  id         String    @id @default(cuid())
+  product    Product   @relation(fields: [productId], references: [id])
+  productId  String    @unique
+  quantity   Int       @default(0)
+  reserved   Int       @default(0)
+  reorderAt  Int       @default(5)
+  location   Location? @relation(fields: [locationId], references: [id])
+  locationId String?
+  updatedAt  DateTime  @updatedAt
 }
 
 model StockMovement {
-  id          String   @id @default(cuid())
-  productSku  String
-  delta       Int
-  reason      String
-  reference   String?
-  createdAt   DateTime @default(now())
+  id         String   @id @default(cuid())
+  productSku String
+  delta      Int
+  reason     String
+  reference  String?
+  createdAt  DateTime @default(now())
 }
 
 model Location {
   id          String       @id @default(cuid())
-  name        String       // e.g. "Gauteng Production Hub", "KZN Fabrication Yard"
+  name        String // e.g. "Gauteng Production Hub", "KZN Fabrication Yard"
   province    Province
   address     String
   isHub       Boolean      @default(false)
@@ -204,14 +220,14 @@ enum Province {
 // ------------------------------------------------------------
 
 model ComplianceDoc {
-  id          String    @id @default(cuid())
-  products    Product[]
-  standard    String    // "AAAMSA Performance Cert", "NRCS VC 9003", "SANS 10400-XA", etc.
-  docType     String    // Certificate, Rating, Marking
-  issuer      String?
-  fileUrl     String?
-  validUntil  DateTime?
-  createdAt   DateTime  @default(now())
+  id         String    @id @default(cuid())
+  products   Product[]
+  standard   String // "AAAMSA Performance Cert", "NRCS VC 9003", "SANS 10400-XA", etc.
+  docType    String // Certificate, Rating, Marking
+  issuer     String?
+  fileUrl    String?
+  validUntil DateTime?
+  createdAt  DateTime  @default(now())
 }
 
 // ------------------------------------------------------------
@@ -219,35 +235,35 @@ model ComplianceDoc {
 // ------------------------------------------------------------
 
 model User {
-  id              String          @id @default(cuid())
-  email           String          @unique
-  name            String
-  phone           String?
+  id               String                    @id @default(cuid())
+  email            String                    @unique
+  name             String
+  phone            String?
   // Local email/password credential (the "EMAIL" sign-in option). OAuth-only users have
   // this null and authenticate through OAuthAccount. In production the credential store is
   // delegated to Supabase Auth per the Group standard — this column supports local/dev and
   // the fallback path (docs/18-authentication-sso.md).
-  passwordHash    String?
-  role            UserRole        @default(RETAIL)
-  authProviders   OAuthAccount[]
-  company         Company?        @relation(fields: [companyId], references: [id])
-  companyId       String?
-  companyRole     CompanyRole?    // OWNER / BUYER / VIEWER — only set when companyId is set
-  cart            Cart?
-  orders          Order[]
-  quotes          Quote[]
-  reviews         Review[]
-  addresses       Address[]
-  wishlist        Wishlist?
+  passwordHash     String?
+  role             UserRole                  @default(RETAIL)
+  authProviders    OAuthAccount[]
+  company          Company?                  @relation(fields: [companyId], references: [id])
+  companyId        String?
+  companyRole      CompanyRole? // OWNER / BUYER / VIEWER — only set when companyId is set
+  cart             Cart?
+  orders           Order[]
+  quotes           Quote[]
+  reviews          Review[]
+  addresses        Address[]
+  wishlist         Wishlist?
   productQuestions ProductQuestion[]
-  supportTickets  SupportTicket[]
-  supportMessages SupportMessage[]
-  loyaltyAccount  LoyaltyAccount?
+  supportTickets   SupportTicket[]
+  supportMessages  SupportMessage[]
+  loyaltyAccount   LoyaltyAccount?
   legalAcceptances LegalDocumentAcceptance[]
-  dsarRequests    DsarRequest[]
-  chatSessions    ChatSession[]
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  dsarRequests     DsarRequest[]
+  chatSessions     ChatSession[]
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
 }
 
 enum UserRole {
@@ -291,32 +307,32 @@ enum AuthProvider {
 // ------------------------------------------------------------
 
 model Company {
-  id              String        @id @default(cuid())
-  name            String
-  registrationNo  String?
-  vatNumber       String?
-  users           User[]
-  tradeAccount    TradeAccount?
-  statements      Statement[]
-  createdAt       DateTime      @default(now())
+  id             String        @id @default(cuid())
+  name           String
+  registrationNo String?
+  vatNumber      String?
+  users          User[]
+  tradeAccount   TradeAccount?
+  statements     Statement[]
+  createdAt      DateTime      @default(now())
 }
 
 enum CompanyRole {
-  OWNER   // full access — team management, statements, credit
-  BUYER   // can order/quote, no team/billing management
-  VIEWER  // read-only — order history and statements
+  OWNER // full access — team management, statements, credit
+  BUYER // can order/quote, no team/billing management
+  VIEWER // read-only — order history and statements
 }
 
 model TradeAccount {
-  id              String       @id @default(cuid())
-  company         Company      @relation(fields: [companyId], references: [id])
-  companyId       String       @unique
-  creditLimit     Decimal?     @db.Decimal(12, 2)
-  creditUsed      Decimal      @db.Decimal(12, 2) @default(0)
-  discountTier    DiscountTier @default(TRADE)
-  approved        Boolean      @default(false)
-  approvedAt      DateTime?
-  createdAt       DateTime     @default(now())
+  id           String       @id @default(cuid())
+  company      Company      @relation(fields: [companyId], references: [id])
+  companyId    String       @unique
+  creditLimit  Decimal?     @db.Decimal(12, 2)
+  creditUsed   Decimal      @default(0) @db.Decimal(12, 2)
+  discountTier DiscountTier @default(TRADE)
+  approved     Boolean      @default(false)
+  approvedAt   DateTime?
+  createdAt    DateTime     @default(now())
 }
 
 enum DiscountTier {
@@ -339,16 +355,16 @@ model Statement {
 }
 
 model Address {
-  id          String   @id @default(cuid())
-  user        User     @relation(fields: [userId], references: [id])
-  userId      String
-  line1       String
-  line2       String?
-  city        String
-  province    Province
-  postalCode  String
-  isDefault   Boolean  @default(false)
-  orders      Order[]
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  line1      String
+  line2      String?
+  city       String
+  province   Province
+  postalCode String
+  isDefault  Boolean  @default(false)
+  orders     Order[]
 }
 
 // ------------------------------------------------------------
@@ -364,42 +380,42 @@ model Cart {
 }
 
 model CartItem {
-  id             String   @id @default(cuid())
-  cart           Cart     @relation(fields: [cartId], references: [id])
+  id             String  @id @default(cuid())
+  cart           Cart    @relation(fields: [cartId], references: [id])
   cartId         String
-  product        Product  @relation(fields: [productId], references: [id])
+  product        Product @relation(fields: [productId], references: [id])
   productId      String
-  quantity       Int      @default(1)
-  configSnapshot Json?    // configurator selections at time of add (size/finish/glazing)
-  unitPrice      Decimal  @db.Decimal(12, 2)
+  quantity       Int     @default(1)
+  configSnapshot Json? // configurator selections at time of add (size/finish/glazing)
+  unitPrice      Decimal @db.Decimal(12, 2)
 }
 
 model Order {
-  id              String        @id @default(cuid())
-  orderNumber     String        @unique
-  user            User          @relation(fields: [userId], references: [id])
-  userId          String
-  items           OrderItem[]
-  status          OrderStatus   @default(PENDING)
-  fulfilmentPath  FulfilmentType
-  cmiPartner      CMIPartner?   @relation(fields: [cmiPartnerId], references: [id])
-  cmiPartnerId    String?
-  subtotal        Decimal       @db.Decimal(12, 2)
-  vatAmount       Decimal       @db.Decimal(12, 2) @default(0) // 15% per current SARS VAT Act rate — see docs/23-legal-tax-compliance.md
-  deliveryFee     Decimal       @db.Decimal(12, 2) @default(0)
-  fragileSurcharge Decimal      @db.Decimal(12, 2) @default(0)
-  coupon          Coupon?       @relation(fields: [couponId], references: [id])
-  couponId        String?
-  discountAmount  Decimal       @db.Decimal(12, 2) @default(0)
-  total           Decimal       @db.Decimal(12, 2)
-  paymentMethod   PaymentMethod
-  paymentRef      String?
-  shipment        Shipment?
-  invoice         Invoice?
-  deliveryAddress Address?      @relation(fields: [deliveryAddressId], references: [id])
+  id                String         @id @default(cuid())
+  orderNumber       String         @unique
+  user              User           @relation(fields: [userId], references: [id])
+  userId            String
+  items             OrderItem[]
+  status            OrderStatus    @default(PENDING)
+  fulfilmentPath    FulfilmentType
+  cmiPartner        CMIPartner?    @relation(fields: [cmiPartnerId], references: [id])
+  cmiPartnerId      String?
+  subtotal          Decimal        @db.Decimal(12, 2)
+  vatAmount         Decimal        @default(0) @db.Decimal(12, 2) // 15% per current SARS VAT Act rate — see docs/23-legal-tax-compliance.md
+  deliveryFee       Decimal        @default(0) @db.Decimal(12, 2)
+  fragileSurcharge  Decimal        @default(0) @db.Decimal(12, 2)
+  coupon            Coupon?        @relation(fields: [couponId], references: [id])
+  couponId          String?
+  discountAmount    Decimal        @default(0) @db.Decimal(12, 2)
+  total             Decimal        @db.Decimal(12, 2)
+  paymentMethod     PaymentMethod
+  paymentRef        String?
+  shipment          Shipment?
+  invoice           Invoice?
+  deliveryAddress   Address?       @relation(fields: [deliveryAddressId], references: [id])
   deliveryAddressId String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 }
 
 enum OrderStatus {
@@ -431,36 +447,36 @@ enum PaymentMethod {
 }
 
 model OrderItem {
-  id             String   @id @default(cuid())
-  order          Order    @relation(fields: [orderId], references: [id])
+  id             String         @id @default(cuid())
+  order          Order          @relation(fields: [orderId], references: [id])
   orderId        String
-  product        Product  @relation(fields: [productId], references: [id])
+  product        Product        @relation(fields: [productId], references: [id])
   productId      String
   quantity       Int
   configSnapshot Json?
-  unitPrice      Decimal  @db.Decimal(12, 2)
-  lineTotal      Decimal  @db.Decimal(12, 2)
-  nonReturnable  Boolean  @default(false) // true for Made-to-Order / CMI custom items
+  unitPrice      Decimal        @db.Decimal(12, 2)
+  lineTotal      Decimal        @db.Decimal(12, 2)
+  nonReturnable  Boolean        @default(false) // true for Made-to-Order / CMI custom items
   returnRequest  ReturnRequest?
 }
 
 model Shipment {
-  id              String        @id @default(cuid())
-  order           Order         @relation(fields: [orderId], references: [id])
-  orderId         String        @unique
-  courierRecord   Courier?      @relation(fields: [courierId], references: [id])
-  courierId       String?
-  courierNameFreeText String?   // fallback when no Courier record exists yet (e.g. "Besfleet" internal)
-  pickupPoint     PickupPoint?  @relation(fields: [pickupPointId], references: [id])
-  pickupPointId   String?
-  trackingNumber  String?
-  waybillUrl      String?
-  fragileHandling Boolean       @default(false)
-  weightKg        Decimal?      @db.Decimal(10, 2)
-  distanceKm      Decimal?      @db.Decimal(10, 2)
-  status          ShipmentStatus @default(PENDING)
-  dispatchedAt    DateTime?
-  deliveredAt     DateTime?
+  id                  String         @id @default(cuid())
+  order               Order          @relation(fields: [orderId], references: [id])
+  orderId             String         @unique
+  courierRecord       Courier?       @relation(fields: [courierId], references: [id])
+  courierId           String?
+  courierNameFreeText String? // fallback when no Courier record exists yet (e.g. "Besfleet" internal)
+  pickupPoint         PickupPoint?   @relation(fields: [pickupPointId], references: [id])
+  pickupPointId       String?
+  trackingNumber      String?
+  waybillUrl          String?
+  fragileHandling     Boolean        @default(false)
+  weightKg            Decimal?       @db.Decimal(10, 2)
+  distanceKm          Decimal?       @db.Decimal(10, 2)
+  status              ShipmentStatus @default(PENDING)
+  dispatchedAt        DateTime?
+  deliveredAt         DateTime?
 }
 
 enum ShipmentStatus {
@@ -476,19 +492,19 @@ enum ShipmentStatus {
 // ------------------------------------------------------------
 
 model Quote {
-  id            String      @id @default(cuid())
-  quoteNumber   String      @unique
-  user          User        @relation(fields: [userId], references: [id])
-  userId        String
-  projectName   String?
-  items         QuoteItem[]
-  status        QuoteStatus @default(SUBMITTED)
-  cmiPartner    CMIPartner? @relation(fields: [cmiPartnerId], references: [id])
-  cmiPartnerId  String?
-  notes         String?
-  validUntil    DateTime?
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id           String      @id @default(cuid())
+  quoteNumber  String      @unique
+  user         User        @relation(fields: [userId], references: [id])
+  userId       String
+  projectName  String?
+  items        QuoteItem[]
+  status       QuoteStatus @default(SUBMITTED)
+  cmiPartner   CMIPartner? @relation(fields: [cmiPartnerId], references: [id])
+  cmiPartnerId String?
+  notes        String?
+  validUntil   DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
 }
 
 enum QuoteStatus {
@@ -502,14 +518,14 @@ enum QuoteStatus {
 }
 
 model QuoteItem {
-  id            String   @id @default(cuid())
-  quote         Quote    @relation(fields: [quoteId], references: [id])
-  quoteId       String
-  description   String
+  id              String   @id @default(cuid())
+  quote           Quote    @relation(fields: [quoteId], references: [id])
+  quoteId         String
+  description     String
   subCategorySlug String?
-  approxAreaM2  Decimal? @db.Decimal(10, 2)
-  quantity      Int      @default(1)
-  notes         String?
+  approxAreaM2    Decimal? @db.Decimal(10, 2)
+  quantity        Int      @default(1)
+  notes           String?
 }
 
 // ------------------------------------------------------------
@@ -517,18 +533,18 @@ model QuoteItem {
 // ------------------------------------------------------------
 
 model CMIPartner {
-  id            String    @id @default(cuid())
-  name          String
-  province      Province
-  vettedSince   DateTime?
-  nrcsApproved  Boolean   @default(false)
-  aaamsaMember  Boolean   @default(false)
-  capabilities  String[]  // e.g. ["Curtain Walling", "Shopfront Systems"]
+  id                 String    @id @default(cuid())
+  name               String
+  province           Province
+  vettedSince        DateTime?
+  nrcsApproved       Boolean   @default(false)
+  aaamsaMember       Boolean   @default(false)
+  capabilities       String[] // e.g. ["Curtain Walling", "Shopfront Systems"]
   capacityM2PerMonth Int?
-  orders        Order[]
-  quotes        Quote[]
-  active        Boolean   @default(true)
-  createdAt     DateTime  @default(now())
+  orders             Order[]
+  quotes             Quote[]
+  active             Boolean   @default(true)
+  createdAt          DateTime  @default(now())
 }
 
 // ------------------------------------------------------------
@@ -536,26 +552,26 @@ model CMIPartner {
 // ------------------------------------------------------------
 
 model PricingAssumption {
-  id      String  @id @default(cuid())
-  key     String  @unique // "AlumCostPerKg", "FabricationPct", etc.
-  value   Decimal @db.Decimal(12, 4)
-  notes   String?
+  id    String  @id @default(cuid())
+  key   String  @unique // "AlumCostPerKg", "FabricationPct", etc.
+  value Decimal @db.Decimal(12, 4)
+  notes String?
 }
 
 model MarkupBand {
-  id            String  @id @default(cuid())
-  categorySlug  String
+  id              String  @id @default(cuid())
+  categorySlug    String
   subCategorySlug String?
-  markupPct     Decimal @db.Decimal(5, 4)
+  markupPct       Decimal @db.Decimal(5, 4)
 }
 
 model DeliveryZone {
-  id              String   @id @default(cuid())
-  province        Province
-  radiusKm        Int      @default(30)
-  baseFee         Decimal  @db.Decimal(10, 2)
-  weightBandKg    Int
-  fragileSurchargePct Decimal @db.Decimal(5, 4) @default(0.08)
+  id                  String   @id @default(cuid())
+  province            Province
+  radiusKm            Int      @default(30)
+  baseFee             Decimal  @db.Decimal(10, 2)
+  weightBandKg        Int
+  fragileSurchargePct Decimal  @default(0.08) @db.Decimal(5, 4)
 }
 
 // ------------------------------------------------------------
@@ -563,19 +579,19 @@ model DeliveryZone {
 // ------------------------------------------------------------
 
 model ContentBlock {
-  id          String     @id @default(cuid())
-  key         String     @unique // e.g. "homepage-hero-slide-1", "promo-banner-top"
-  type        ContentType
-  title       String?
-  body        String?
-  imageUrl    String?
-  linkUrl     String?
-  sortOrder   Int        @default(0)
-  published   Boolean    @default(false)
-  publishAt   DateTime?
-  updatedBy   String?    // User.id of the editor, for an audit trail
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id        String      @id @default(cuid())
+  key       String      @unique // e.g. "homepage-hero-slide-1", "promo-banner-top"
+  type      ContentType
+  title     String?
+  body      String?
+  imageUrl  String?
+  linkUrl   String?
+  sortOrder Int         @default(0)
+  published Boolean     @default(false)
+  publishAt DateTime?
+  updatedBy String? // User.id of the editor, for an audit trail
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
 }
 
 enum ContentType {
@@ -587,13 +603,13 @@ enum ContentType {
 }
 
 model MediaAsset {
-  id        String   @id @default(cuid())
-  url       String
-  altText   String
-  tags      String[]
-  sizeBytes Int?
+  id         String   @id @default(cuid())
+  url        String
+  altText    String
+  tags       String[]
+  sizeBytes  Int?
   uploadedBy String?
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
 }
 
 // ------------------------------------------------------------
@@ -601,15 +617,15 @@ model MediaAsset {
 // ------------------------------------------------------------
 
 model Review {
-  id         String   @id @default(cuid())
-  product    Product  @relation(fields: [productId], references: [id])
-  productId  String
-  user       User     @relation(fields: [userId], references: [id])
-  userId     String
-  rating     Int
-  comment    String?
-  photoUrls  String[]
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  product   Product  @relation(fields: [productId], references: [id])
+  productId String
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  rating    Int
+  comment   String?
+  photoUrls String[]
+  createdAt DateTime @default(now())
 }
 
 // ------------------------------------------------------------
@@ -618,25 +634,25 @@ model Review {
 // ------------------------------------------------------------
 
 model LegalDocument {
-  id          String            @id @default(cuid())
-  slug        String            // "terms", "privacy", "cookies", "returns", "paia-manual", "accessibility"
-  type        LegalDocumentType
-  title       String
-  version     String            // e.g. "1.2" — the version a buyer accepted travels with their order
-  bodyMarkdown String           @db.Text
-  publishedAt DateTime?
-  acceptances LegalDocumentAcceptance[]
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  id           String                    @id @default(cuid())
+  slug         String // "terms", "privacy", "cookies", "returns", "paia-manual", "accessibility"
+  type         LegalDocumentType
+  title        String
+  version      String // e.g. "1.2" — the version a buyer accepted travels with their order
+  bodyMarkdown String                    @db.Text
+  publishedAt  DateTime?
+  acceptances  LegalDocumentAcceptance[]
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
 
   @@unique([slug, version])
 }
 
 enum LegalDocumentType {
-  TERMS_AND_CONDITIONS  // ECTA-aligned — Section 43 disclosure fields live here
-  PRIVACY_POLICY        // POPIA-aligned
+  TERMS_AND_CONDITIONS // ECTA-aligned — Section 43 disclosure fields live here
+  PRIVACY_POLICY // POPIA-aligned
   COOKIE_POLICY
-  RETURNS_REFUNDS       // CPA 6-month implied warranty disclosure
+  RETURNS_REFUNDS // CPA 6-month implied warranty disclosure
   PAIA_MANUAL
   ACCESSIBILITY_STATEMENT
 }
@@ -659,7 +675,7 @@ model Invoice {
   order             Order    @relation(fields: [orderId], references: [id])
   orderId           String   @unique
   merchantVatNumber String
-  customerVatNumber String?  // required for B2B (Trade/Volume) invoices
+  customerVatNumber String? // required for B2B (Trade/Volume) invoices
   subtotal          Decimal  @db.Decimal(12, 2)
   vatAmount         Decimal  @db.Decimal(12, 2) // 15% — see docs/23-legal-tax-compliance.md for the current-rate note
   total             Decimal  @db.Decimal(12, 2)
@@ -678,12 +694,12 @@ model Counter {
 }
 
 model DsarRequest {
-  id          String        @id @default(cuid())
-  user        User          @relation(fields: [userId], references: [id])
+  id          String     @id @default(cuid())
+  user        User       @relation(fields: [userId], references: [id])
   userId      String
   type        DsarType
-  status      DsarStatus    @default(RECEIVED)
-  requestedAt DateTime      @default(now())
+  status      DsarStatus @default(RECEIVED)
+  requestedAt DateTime   @default(now())
   resolvedAt  DateTime?
   notes       String?
 
@@ -691,9 +707,9 @@ model DsarRequest {
 }
 
 enum DsarType {
-  ACCESS       // "send me everything you hold on me"
+  ACCESS // "send me everything you hold on me"
   CORRECTION
-  DELETION     // "right to be forgotten"
+  DELETION // "right to be forgotten"
 }
 
 enum DsarStatus {
@@ -711,20 +727,20 @@ enum DsarStatus {
 model Courier {
   id          String     @id @default(cuid())
   name        String     @unique // "Bob Go", "The Courier Guy", "RAM", "Aramex"
-  apiProvider String?    // aggregator this courier is reached through, e.g. "Bob Go" itself is often the aggregator
+  apiProvider String? // aggregator this courier is reached through, e.g. "Bob Go" itself is often the aggregator
   active      Boolean    @default(true)
   shipments   Shipment[]
 }
 
 model PickupPoint {
-  id        String       @id @default(cuid())
+  id        String      @id @default(cuid())
   network   PudoNetwork
   name      String
   address   String
   province  Province
-  latitude  Decimal?     @db.Decimal(9, 6)
-  longitude Decimal?     @db.Decimal(9, 6)
-  active    Boolean      @default(true)
+  latitude  Decimal?    @db.Decimal(9, 6)
+  longitude Decimal?    @db.Decimal(9, 6)
+  active    Boolean     @default(true)
   shipments Shipment[]
 }
 
@@ -739,12 +755,12 @@ enum PudoNetwork {
 // ------------------------------------------------------------
 
 model NotificationLog {
-  id        String              @id @default(cuid())
-  userId    String?
-  channel   NotificationChannel
-  event     String              // "ORDER_CONFIRMED", "ABANDONED_CART", "QUOTE_READY", etc.
-  status    String              // provider-reported delivery status
-  sentAt    DateTime            @default(now())
+  id      String              @id @default(cuid())
+  userId  String?
+  channel NotificationChannel
+  event   String // "ORDER_CONFIRMED", "ABANDONED_CART", "QUOTE_READY", etc.
+  status  String // provider-reported delivery status
+  sentAt  DateTime            @default(now())
 
   @@index([userId])
 }
@@ -815,7 +831,7 @@ model FaqItem {
   id        String   @id @default(cuid())
   question  String
   answer    String   @db.Text
-  category  String   // "Ordering", "Payment", "Delivery", "Returns", "Technical Specs"
+  category  String // "Ordering", "Payment", "Delivery", "Returns", "Technical Specs"
   sortOrder Int      @default(0)
   updatedAt DateTime @updatedAt
 }
@@ -839,7 +855,7 @@ model ReturnRequest {
 enum ReturnStatus {
   REQUESTED
   APPROVED
-  REJECTED       // e.g. item was Made-to-Order / non-returnable per ECTA s42(2)
+  REJECTED // e.g. item was Made-to-Order / non-returnable per ECTA s42(2)
   ITEM_RECEIVED
   REFUNDED
 }
@@ -850,18 +866,18 @@ enum ReturnStatus {
 // ------------------------------------------------------------
 
 model SupportTicket {
-  id           String            @id @default(cuid())
-  user         User              @relation(fields: [userId], references: [id])
-  userId       String
-  subject      String
-  channel      SupportChannel
-  status       SupportStatus     @default(OPEN)
-  priority     SupportPriority   @default(NORMAL)
-  messages     SupportMessage[]
-  chatSession  ChatSession?      @relation(fields: [chatSessionId], references: [id])
+  id            String           @id @default(cuid())
+  user          User             @relation(fields: [userId], references: [id])
+  userId        String
+  subject       String
+  channel       SupportChannel
+  status        SupportStatus    @default(OPEN)
+  priority      SupportPriority  @default(NORMAL)
+  messages      SupportMessage[]
+  chatSession   ChatSession?     @relation(fields: [chatSessionId], references: [id])
   chatSessionId String?          @unique // set when a ChatSession escalates to a human ticket
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   @@index([userId])
 }
@@ -887,13 +903,13 @@ enum SupportPriority {
 }
 
 model SupportMessage {
-  id        String   @id @default(cuid())
+  id        String        @id @default(cuid())
   ticket    SupportTicket @relation(fields: [ticketId], references: [id])
   ticketId  String
-  sender    User     @relation(fields: [senderId], references: [id])
+  sender    User          @relation(fields: [senderId], references: [id])
   senderId  String
-  body      String   @db.Text
-  createdAt DateTime @default(now())
+  body      String        @db.Text
+  createdAt DateTime      @default(now())
 
   @@index([ticketId])
 }
@@ -904,21 +920,21 @@ model SupportMessage {
 // ------------------------------------------------------------
 
 model ChatSession {
-  id             String        @id @default(cuid())
-  user           User?         @relation(fields: [userId], references: [id])
-  userId         String?
-  status         ChatStatus    @default(ACTIVE)
-  messages       ChatMessage[]
+  id              String         @id @default(cuid())
+  user            User?          @relation(fields: [userId], references: [id])
+  userId          String?
+  status          ChatStatus     @default(ACTIVE)
+  messages        ChatMessage[]
   escalatedTicket SupportTicket?
-  startedAt      DateTime      @default(now())
-  endedAt        DateTime?
+  startedAt       DateTime       @default(now())
+  endedAt         DateTime?
 
   @@index([userId])
 }
 
 enum ChatStatus {
   ACTIVE
-  ESCALATED   // handed off to a human — see SupportTicket.chatSessionId
+  ESCALATED // handed off to a human — see SupportTicket.chatSessionId
   CLOSED
 }
 
@@ -940,12 +956,12 @@ enum ChatRole {
 }
 
 model KnowledgeBaseEntry {
-  id          String   @id @default(cuid())
-  title       String
-  content     String   @db.Text
-  category    String   // "Product Specs", "Pricing", "Lead Times", "Compliance", "Supplier Info"
-  sourceRef   String?  // e.g. "Pricing Framework v1.0, Sliding Windows" — traceability back to source docs
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  title     String
+  content   String   @db.Text
+  category  String // "Product Specs", "Pricing", "Lead Times", "Compliance", "Supplier Info"
+  sourceRef String? // e.g. "Pricing Framework v1.0, Sliding Windows" — traceability back to source docs
+  updatedAt DateTime @updatedAt
 }
 
 // ------------------------------------------------------------
@@ -954,17 +970,17 @@ model KnowledgeBaseEntry {
 // ------------------------------------------------------------
 
 model Coupon {
-  id            String      @id @default(cuid())
-  code          String      @unique
-  type          CouponType
-  value         Decimal     @db.Decimal(10, 2) // percentage points OR fixed Rand amount, per `type`
-  minCartValue  Decimal?    @db.Decimal(12, 2)
-  expiresAt     DateTime?
-  usageLimit    Int?
-  usedCount     Int         @default(0)
-  orders        Order[]
-  active        Boolean     @default(true)
-  createdAt     DateTime    @default(now())
+  id           String     @id @default(cuid())
+  code         String     @unique
+  type         CouponType
+  value        Decimal    @db.Decimal(10, 2) // percentage points OR fixed Rand amount, per `type`
+  minCartValue Decimal?   @db.Decimal(12, 2)
+  expiresAt    DateTime?
+  usageLimit   Int?
+  usedCount    Int        @default(0)
+  orders       Order[]
+  active       Boolean    @default(true)
+  createdAt    DateTime   @default(now())
 }
 
 enum CouponType {
@@ -974,13 +990,13 @@ enum CouponType {
 }
 
 model Bundle {
-  id            String       @id @default(cuid())
-  name          String
-  description   String?
-  discountPct   Decimal      @db.Decimal(5, 4)
-  items         BundleItem[]
-  active        Boolean      @default(true)
-  createdAt     DateTime     @default(now())
+  id          String       @id @default(cuid())
+  name        String
+  description String?
+  discountPct Decimal      @db.Decimal(5, 4)
+  items       BundleItem[]
+  active      Boolean      @default(true)
+  createdAt   DateTime     @default(now())
 }
 
 model BundleItem {
@@ -993,13 +1009,13 @@ model BundleItem {
 }
 
 model LoyaltyAccount {
-  id             String               @id @default(cuid())
-  user           User                 @relation(fields: [userId], references: [id])
-  userId         String               @unique
-  pointsBalance  Int                  @default(0)
-  tier           LoyaltyTier          @default(BRONZE)
-  transactions   LoyaltyTransaction[]
-  createdAt      DateTime             @default(now())
+  id            String               @id @default(cuid())
+  user          User                 @relation(fields: [userId], references: [id])
+  userId        String               @unique
+  pointsBalance Int                  @default(0)
+  tier          LoyaltyTier          @default(BRONZE)
+  transactions  LoyaltyTransaction[]
+  createdAt     DateTime             @default(now())
 }
 
 enum LoyaltyTier {
@@ -1013,28 +1029,28 @@ model LoyaltyTransaction {
   id               String         @id @default(cuid())
   loyaltyAccount   LoyaltyAccount @relation(fields: [loyaltyAccountId], references: [id])
   loyaltyAccountId String
-  points           Int            // positive = earned, negative = redeemed
-  reason           String         // "Order #ALS-1234", "Referral bonus", "Birthday bonus"
+  points           Int // positive = earned, negative = redeemed
+  reason           String // "Order #ALS-1234", "Referral bonus", "Birthday bonus"
   createdAt        DateTime       @default(now())
 
   @@index([loyaltyAccountId])
 }
 
 model NewsletterSubscriber {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  source        String?  // "footer", "homepage-popup", "checkout-optin"
-  active        Boolean  @default(true)
-  subscribedAt  DateTime @default(now())
+  id             String    @id @default(cuid())
+  email          String    @unique
+  source         String? // "footer", "homepage-popup", "checkout-optin"
+  active         Boolean   @default(true)
+  subscribedAt   DateTime  @default(now())
   unsubscribedAt DateTime?
 }
 
 model AbandonedCartLog {
-  id             String   @id @default(cuid())
-  cartId         String   @unique
+  id             String    @id @default(cuid())
+  cartId         String    @unique
   userId         String?
   lastActivityAt DateTime
-  remindersSent  Int      @default(0)
+  remindersSent  Int       @default(0)
   recoveredAt    DateTime?
 }
 
@@ -1045,14 +1061,14 @@ model AbandonedCartLog {
 
 model Advertisement {
   id           String    @id @default(cuid())
-  slot         Int        // 1-8, position between homepage sections
+  slot         Int // 1-8, position between homepage sections
   campaignName String
   imageUrl     String
   linkUrl      String
   startAt      DateTime?
   endAt        DateTime?
-  active       Boolean    @default(true)
-  createdAt    DateTime   @default(now())
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now())
 
   @@index([slot])
 }
@@ -1067,7 +1083,7 @@ model Project {
   title        String
   description  String         @db.Text
   sector       Segment
-  categorySlug String?        // links back to a Category, informational only
+  categorySlug String? // links back to a Category, informational only
   images       ProjectImage[]
   featured     Boolean        @default(false) // featured = appears in the projects hero slider
   completedAt  DateTime?
@@ -1094,10 +1110,133 @@ model AnalyticsEvent {
   id         String   @id @default(cuid())
   userId     String?
   sessionId  String?
-  eventType  String   // "PRICE_VIEWED", "CMI_ROUTED", "QUOTE_REQUESTED", "COUPON_APPLIED", etc.
+  eventType  String // "PRICE_VIEWED", "CMI_ROUTED", "QUOTE_REQUESTED", "COUPON_APPLIED", "PRODUCT_VIEWED", etc.
   metadata   Json?
   occurredAt DateTime @default(now())
 
   @@index([eventType])
   @@index([userId])
+  // "Recently Viewed" and the session-scoped variant both read the newest PRODUCT_VIEWED rows
+  // for one key, so the composite index serves that lookup directly instead of scanning every
+  // event the platform has ever logged.
+  @@index([eventType, occurredAt])
+  @@index([eventType, sessionId, occurredAt])
+}
+
+// ------------------------------------------------------------
+// MERCHANDISING — the 10 homepage/PDP sections in
+// docs/38-merchandising-sections.md (spec v1.0, September 2026)
+//
+// Four of the ten sections aggregate data the platform already holds (OrderItem, Review,
+// Product, AnalyticsEvent) and need no model here. These five back the ones that carry
+// human curation or a server-enforced constraint.
+// ------------------------------------------------------------
+
+// Featured / Editor's Picks. The one purely editorial section — `note` is the curator's own
+// written reason for the pick, rendered on the card, and is deliberately free text rather than
+// a generated category label: "why this one" is the whole value of the section.
+model FeaturedProduct {
+  id        String    @id @default(cuid())
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId String    @unique // one pick per product — a product cannot be featured twice
+  note      String    @db.Text // the curator's note, shown verbatim on the card
+  curator   String? // who made the pick, for attribution in the admin screen
+  // Exactly one pick is the hero of the magazine layout; the rest are the supporting column.
+  // A partial unique index (see the migration) enforces at most one live hero.
+  isHero    Boolean   @default(false)
+  sortOrder Int       @default(0)
+  published Boolean   @default(true)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([published, sortOrder])
+}
+
+// Seasonal / thematic Collection. A theme to browse into (a "lookbook"), not a shelf of
+// directly-comparable items — which is why it gets its own visual grammar and its own model
+// rather than reusing Category.
+model Collection {
+  id           String           @id @default(cuid())
+  slug         String           @unique
+  title        String
+  description  String?
+  // A collection is usually seasonal (Summer 2026, Winter Renovation) but an evergreen one is
+  // legitimate too, so the dates are optional rather than required.
+  season       String?
+  heroImageUrl String?
+  accentHex    String? // per-collection card tint; falls back to the Skyline palette
+  finish       Finish?          @relation(fields: [finishId], references: [id])
+  finishId     String? // optional link for the finish-themed collections
+  items        CollectionItem[]
+  sortOrder    Int              @default(0)
+  published    Boolean          @default(true)
+  startsAt     DateTime?
+  endsAt       DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([published, sortOrder])
+}
+
+// Ordered membership of a Collection. `note` is per-item so a collection can say why each piece
+// belongs to the theme, which a bare join table could not carry.
+model CollectionItem {
+  id           String     @id @default(cuid())
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  collectionId String
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId    String
+  note         String?
+  sortOrder    Int        @default(0)
+
+  // A product appears at most once in a given collection.
+  @@unique([collectionId, productId])
+  @@index([collectionId, sortOrder])
+}
+
+// Deals of the Day. `stockLimit` is the constraint the section's progress bar displays and the
+// server enforces: DailyDealsService.claim() increments `claimed` with a guarded UPDATE that
+// refuses to cross the limit, so the bar is a readout of a real cap rather than the only thing
+// standing between a buyer and an over-sold deal.
+model DailyDeal {
+  id         String   @id @default(cuid())
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId  String
+  dealPrice  Decimal  @db.Decimal(12, 2)
+  stockLimit Int
+  claimed    Int      @default(0)
+  headline   String?
+  // The window the countdown clock counts down to.
+  startsAt   DateTime
+  endsAt     DateTime
+  published  Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([published, endsAt])
+  @@index([productId])
+}
+
+// "Complete the Project" pairings — self-referencing on Product via two named relations.
+//
+// Admin-curated on purpose. A real "frequently bought together" computed from order
+// co-occurrence is reserved as a Phase 2 method (getComputedPairings(), currently an empty
+// stub) because 2,147 SKUs across a young order book do not yet produce statistically
+// meaningful co-occurrence — the honest state today is curation.
+model ProductPairing {
+  id        String   @id @default(cuid())
+  source    Product  @relation("PairingSource", fields: [sourceId], references: [id], onDelete: Cascade)
+  sourceId  String
+  target    Product  @relation("PairingTarget", fields: [targetId], references: [id], onDelete: Cascade)
+  targetId  String
+  note      String? // why they go together — rendered beside the connecting line on the PDP
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  // One pairing per ordered pair; the reverse direction is a separate row, because "frame goes
+  // with lock" and "lock goes with frame" can carry different notes.
+  @@unique([sourceId, targetId])
+  @@index([sourceId, sortOrder])
 }

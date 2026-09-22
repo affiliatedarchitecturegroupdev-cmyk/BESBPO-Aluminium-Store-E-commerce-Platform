@@ -5,6 +5,7 @@ export type CatalogQuery = {
   segment?: string;
   category?: string;
   subCategory?: string;
+  finishId?: string;
   search?: string;
   sort?: 'recent' | 'name' | 'price-asc' | 'price-desc';
   take?: string;
@@ -53,6 +54,7 @@ export class CatalogBrowseService {
       ...(q.segment ? { segments: { has: q.segment as never } } : {}),
       ...(q.category ? { subCategory: { category: { slug: q.category } } } : {}),
       ...(q.subCategory ? { subCategory: { slug: q.subCategory } } : {}),
+      ...(q.finishId ? { finishId: q.finishId } : {}),
       ...(q.search
         ? {
             OR: [

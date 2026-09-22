@@ -11,19 +11,53 @@ import InstallationShowcase, { type FeaturedProject } from '../components/Instal
 import ReviewsCarousel, { type ReviewCard } from '../components/ReviewsCarousel';
 import NewsletterSignup from '../components/NewsletterSignup';
 import BusinessDeskCTA from '../components/BusinessDeskCTA';
+// Ten merchandising sections — docs/37-merchandising-sections.md (spec v1.0).
+import BestSellersSection from '../components/merch/BestSellersSection';
+import TopRatedSection from '../components/merch/TopRatedSection';
+import ShopByFinishSection from '../components/merch/ShopByFinishSection';
+import RecentlyViewedSection from '../components/merch/RecentlyViewedSection';
+import RecommendedSection from '../components/merch/RecommendedSection';
+import DailyDealsSection from '../components/merch/DailyDealsSection';
+import FeaturedProductsSection from '../components/merch/FeaturedProductsSection';
+import CollectionsSection from '../components/merch/CollectionsSection';
+import BudgetShopSection from '../components/merch/BudgetShopSection';
 import { serverFetch } from '../lib/api';
 import { formatRand, type Advertisement, type Bundle, type Category, type Product, type Project, type ProductList } from '../lib/catalog-types';
+import type {
+  BestSellerProduct,
+  TopRatedProduct,
+  FinishSwatchSet,
+  BudgetShop,
+  DailyDeal,
+  FeaturedPick,
+  CollectionSummary,
+} from '../lib/merchandising-types';
 import type { ContentBlock, LatestReview } from '../lib/content-types';
 
-// Route: / (home) — the 18-section stack described in the spec (docs/02-storefront-ux-ia.md).
+// Route: / (home) — the 18-section stack described in the spec (docs/02-storefront-ux-ia.md),
+// extended with the ten merchandising sections in docs/37-merchandising-sections.md.
 // Every section reads live data from the API via serverFetch; each falls back to a static
 // placeholder when the catalogue is empty or the API is unreachable, so the homepage always
 // renders something real rather than a 500.
+//
+// Clearance needs no fallback and is the one section that disappears when empty — a clearance
+// shelf with nothing on it must not advertise a made-up discount.
 
 const FALLBACK_TRENDING: CarouselProduct[] = [
   { sku: 'ALS-PVD-0017', name: 'Pivot Entrance Door — 1509×2700mm', priceLabel: 'R 20,734' },
   { sku: 'ALS-CMW-0031', name: 'Casement Window — 1209×1209mm', priceLabel: 'R 4,714' },
 ];
+
+// Used only if GET /catalog/budget-shop is unreachable. The band labels and counts are the
+// server's to define; this keeps the client section from crashing on a null. It renders as an
+// empty section rather than inventing counts.
+const EMPTY_BUDGET_SHOP: BudgetShop = {
+  tiers: [],
+  activeTier: '',
+  items: [],
+  approximate: true,
+  approximationNote: '',
+};
 
 const FALLBACK_BUNDLES: BundleCard[] = [
   { id: 'b1', name: 'Starter Sliding Door Bundle', description: 'Door + heavy-duty roller set + multi-point lock', discountPct: 0.08, itemCount: 3 },
@@ -66,6 +100,20 @@ export default async function Page() {
     serverFetch<LatestReview[]>('/reviews/latest?take=6'),
     serverFetch<ContentBlock[]>('/cms/content-blocks?type=ANNOUNCEMENT'),
     serverFetch<ContentBlock[]>('/cms/content-blocks?type=HERO_SLIDE'),
+  ]);
+
+  // Merchandising sections. Fetched together and each tolerant of the API being down: an
+  // unreachable endpoint yields an empty array/object and the section renders its own empty
+  // state rather than taking the homepage down with it. The every-60s revalidation is the same
+  // as the core sections above.
+  const [bestSellers, topRated, finishes, budgetShop, deals, featured, collections] = await Promise.all([
+    serverFetch<BestSellerProduct[]>('/catalog/best-sellers?take=6'),
+    serverFetch<TopRatedProduct[]>('/catalog/top-rated?take=6'),
+    serverFetch<FinishSwatchSet>('/catalog/by-finish'),
+    serverFetch<BudgetShop>('/catalog/budget-shop'),
+    serverFetch<DailyDeal[]>('/daily-deals'),
+    serverFetch<FeaturedPick[]>('/featured-products'),
+    serverFetch<CollectionSummary[]>('/collections'),
   ]);
 
   const trendingCards = trending?.items?.length ? toCarouselProducts(trending.items) : FALLBACK_TRENDING;
@@ -127,13 +175,28 @@ export default async function Page() {
       </section>
 
       <ShopBySector />
+
+      {/* Merchandising stack. The order is deliberate: urgency (deals) first, then curated
+          recommendation, then the ranking sections, then the browse-by-attribute sections, and
+          the personalised pair last because it only appears once the visitor has a history. */}
+      <DailyDealsSection deals={deals ?? []} />
+      <FeaturedProductsSection picks={featured ?? []} />
       <ProductCarousel anchorId="trending" title="Trending" subtitle="This month's most-configured products" products={trendingCards} />
+      <BestSellersSection products={bestSellers ?? []} />
+      <TopRatedSection products={topRated ?? []} />
       <AdSlot ad={adFor(1)} />
       <BundleGrid anchorId="bundles" bundles={bundleCards} />
+      <CollectionsSection collections={collections ?? []} />
+      <ShopByFinishSection finishes={finishes?.items ?? []} />
+      <BudgetShopSection initial={budgetShop ?? EMPTY_BUDGET_SHOP} />
       <ProductCarousel anchorId="recent-arrivals" title="Recent Arrivals" products={recentCards} />
       {clearanceCards.length > 0 && (
         <ProductCarousel anchorId="clearance" title="Clearance Sale" subtitle="End-of-line and overstock, while it lasts" products={clearanceCards} />
       )}
+      {/* These two render nothing when there is no history, which is the correct state for a
+          first-time visitor — see the components for why they do not show an empty panel. */}
+      <RecentlyViewedSection />
+      <RecommendedSection />
       <AdSlot ad={adFor(2)} />
       <AdSlot ad={adFor(3)} />
       <InstallationShowcase projects={featuredProjects} />

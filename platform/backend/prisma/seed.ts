@@ -83,12 +83,15 @@ type Catalogue = {
 const CATALOGUE: Catalogue = JSON.parse(
   readFileSync(join(__dirname, '..', 'data', 'catalogue.json'), 'utf8'),
 ) as Catalogue;
+// sortOrder fixes the swatch position so "Shop by Finish" does not reorder as stock moves.
+// `description` is the one-line swatch caption in that section — it says what the finish *is*
+// (and its coating standard), not a marketing claim, so it stays accurate as the range changes.
 const FINISHES = [
-  { name: 'Natural Anodised', hex: '#C8CDD2', costPerM2: 25, qualanod: true, qualicoat: false },
-  { name: 'Satin White (RAL 9016)', hex: '#F1F0EA', costPerM2: 38, qualicoat: true, qualanod: false },
-  { name: 'Charcoal Grey (RAL 7016)', hex: '#383E42', costPerM2: 38, qualicoat: true, qualanod: false },
-  { name: 'Graphite Black (RAL 9005)', hex: '#0E0E10', costPerM2: 40, qualicoat: true, qualanod: false },
-  { name: 'Bronze Anodised', hex: '#4A3B2A', costPerM2: 55, qualanod: true, qualicoat: false },
+  { name: 'Natural Anodised', hex: '#C8CDD2', costPerM2: 25, qualanod: true, qualicoat: false, sortOrder: 1, description: 'Clear anodised, silver-grey. Qualanod-certified.' },
+  { name: 'Satin White (RAL 9016)', hex: '#F1F0EA', costPerM2: 38, qualicoat: true, qualanod: false, sortOrder: 2, description: 'Powder-coated off-white. Qualicoat-certified.' },
+  { name: 'Charcoal Grey (RAL 7016)', hex: '#383E42', costPerM2: 38, qualicoat: true, qualanod: false, sortOrder: 3, description: 'Powder-coated anthracite. Qualicoat-certified.' },
+  { name: 'Graphite Black (RAL 9005)', hex: '#0E0E10', costPerM2: 40, qualicoat: true, qualanod: false, sortOrder: 4, description: 'Powder-coated deep black. Qualicoat-certified.' },
+  { name: 'Bronze Anodised', hex: '#4A3B2A', costPerM2: 55, qualanod: true, qualicoat: false, sortOrder: 5, description: 'Dark bronze anodised. Qualanod-certified.' },
 ];
 
 // Names must match GLAZING_UPGRADE_PER_M2 keys in assumptions.json.
@@ -449,6 +452,186 @@ async function main() {
     cleared += 1;
   }
   console.log(`  ${cleared} clearance lines`);
+
+  // ---- Merchandising (docs/38-merchandising-sections.md, spec v1.0) -------------------------
+  //
+  // Best Sellers, Top Rated, Recently Viewed, Recommended For You and Trending are computed from
+  // live data and are deliberately not seeded — fabricated sales, ratings or view history would
+  // be manufactured social proof, which the Consumer Protection Act prohibits as misleading
+  // marketing (s.41), and would also make the ranking sections dishonest. Only the four curated
+  // sections are seeded, and each pick below is a real catalogue SKU chosen for a stated reason.
+  console.log('Seeding merchandising sections…');
+
+  // Only SKUs that a curated section actually references, so the seed does not carry dead ids.
+  const productBySku = new Map<string, { id: string }>();
+  for (const sku of [
+    'ALS-SLW-0001', 'ALS-SLD-0001', 'ALS-CMW-0031', 'ALS-HDW-0001', 'ALS-HDW-0005',
+    'ALS-HDW-0006', 'ALS-HDW-0008', 'ALS-HDW-0011', 'ALS-SCD-0001',
+    'ALS-FGR-0001', 'ALS-SLT-0001', 'ALS-FXN-0001', 'ALS-EXT-0001',
+  ]) {
+    const p = await prisma.product.findUnique({ where: { sku }, select: { id: true } });
+    if (p) productBySku.set(sku, p);
+  }
+
+  // Featured / Editor's Picks. One hero plus a supporting column; `note` is the curator's reason.
+  const featuredSeed = [
+    { sku: 'ALS-SLD-0001', note: 'The standard 2-panel slider is our highest-volume moving line and the one most first-time buyers configure correctly without help.', isHero: true, curator: 'Aluminium Store merchandising' },
+    { sku: 'ALS-CMW-0031', note: 'A single-sash casement that suits most coastal and inland wall openings — the safest default when a buyer is unsure of the opening type.', isHero: false, curator: 'Aluminium Store merchandising' },
+    { sku: 'ALS-SLW-0001', note: 'The smallest sliding window in the range. Good for a bathroom or utility opening where a full unit would be oversized.', isHero: false, curator: 'Aluminium Store merchandising' },
+    { sku: 'ALS-SCD-0001', note: 'Mesh-infill sliding security door — added after repeated enquiries about a burglar-bar alternative that still matches the window frame.', isHero: false, curator: 'Aluminium Store merchandising' },
+  ];
+  for (const [i, f] of featuredSeed.entries()) {
+    const p = productBySku.get(f.sku);
+    if (!p) continue;
+    const existing = await prisma.featuredProduct.findUnique({ where: { productId: p.id } });
+    if (existing) continue;
+    if (f.isHero) {
+      // Idempotent re-seed: demote any hero left by a previous run before promoting this one.
+      await prisma.featuredProduct.updateMany({ where: { isHero: true }, data: { isHero: false } });
+    }
+    await prisma.featuredProduct.create({
+      data: { productId: p.id, note: f.note, curator: f.curator, isHero: f.isHero, sortOrder: i, published: true },
+    });
+  }
+
+  // Seasonal / Thematic Collections. Items are grouped by sub-category of the SKUs above, so the
+  // note on each line is about the theme rather than a repeated product description.
+  const collectionsSeed = [
+    {
+      slug: 'coastal-specification-2026',
+      title: 'Coastal Specification 2026',
+      description: 'Units specified for salt-laden air along the KwaZulu-Natal and Western Cape coastlines, where corrosion resistance drives the finish choice.',
+      season: 'Summer 2026',
+      accentHex: '#1F4E5F',
+      notes: 'Sea air attacks unprotected aluminium; these lines are specified with a coating standard suited to it.',
+      skus: ['ALS-SLW-0001', 'ALS-CMW-0031', 'ALS-SCD-0001', 'ALS-SLD-0001'],
+    },
+    {
+      slug: 'access-hardware-refresh',
+      title: 'Access & Hardware Refresh',
+      description: 'The handles, locks and rollers that are replaced most often on an existing installation — the parts a maintenance buyer reorders.',
+      season: null,
+      accentHex: '#5A4632',
+      notes: 'Worn ironmongery is the most common reason a working door starts to feel faulty.',
+      skus: ['ALS-HDW-0001', 'ALS-HDW-0005', 'ALS-HDW-0006', 'ALS-HDW-0008', 'ALS-HDW-0011'],
+    },
+    {
+      slug: 'weatherproofing-and-finishing',
+      title: 'Weatherproofing & Finishing',
+      description: 'Sealants, fixings and rainwater profiles for closing up an installation — the consumables that finish a job.',
+      season: null,
+      accentHex: '#3F4A45',
+      notes: 'The last 5% of a job is where most water ingress complaints originate.',
+      skus: ['ALS-SLT-0001', 'ALS-FXN-0001', 'ALS-FGR-0001', 'ALS-EXT-0001'],
+    },
+  ];
+  for (const [i, c] of collectionsSeed.entries()) {
+    const existing = await prisma.collection.findUnique({ where: { slug: c.slug } });
+    if (existing) continue;
+    const itemData = c.skus
+      .map((sku, idx) => {
+        const p = productBySku.get(sku);
+        return p ? { productId: p.id, note: c.notes, sortOrder: idx } : null;
+      })
+      .filter((x): x is { productId: string; note: string; sortOrder: number } => x !== null);
+    if (itemData.length === 0) continue;
+    await prisma.collection.create({
+      data: {
+        slug: c.slug,
+        title: c.title,
+        description: c.description,
+        season: c.season,
+        accentHex: c.accentHex,
+        sortOrder: i,
+        published: true,
+        items: { create: itemData },
+      },
+    });
+  }
+
+  // "Complete the Project" pairings. Ordered pairs, both directions seeded where both readings
+  // are useful, since the note differs by direction.
+  const pairingsSeed = [
+    { source: 'ALS-SLD-0001', target: 'ALS-HDW-0008', note: 'The roller set the slider is specified with — the standard pairing for this door weight.' },
+    { source: 'ALS-SLD-0001', target: 'ALS-HDW-0006', note: 'High-security multi-point lock option for an entrance-facing slider.' },
+    { source: 'ALS-SLW-0001', target: 'ALS-HDW-0011', note: 'Friction hinge for the opening sash of this window.' },
+    { source: 'ALS-CMW-0031', target: 'ALS-HDW-0011', note: 'Casement friction hinge — required for the side-hung sash.' },
+    { source: 'ALS-CMW-0031', target: 'ALS-HDW-0001', note: 'Standard lever handle to match the casement frame.' },
+    { source: 'ALS-HDW-0008', target: 'ALS-SLD-0001', note: 'Fits the 2-panel slider in this range.' },
+    { source: 'ALS-HDW-0008', target: 'ALS-HDW-0006', note: 'Frequently replaced together when a slider is serviced.' },
+    { source: 'ALS-SCD-0001', target: 'ALS-HDW-0006', note: 'Security door lock upgrade.' },
+    { source: 'ALS-FGR-0001', target: 'ALS-SLT-0001', note: 'Fascia joints are sealed with a neutral-cure silicone.' },
+    { source: 'ALS-EXT-0001', target: 'ALS-FXN-0001', note: 'Self-drilling screws for fixing this profile.' },
+  ];
+  let pairingCount = 0;
+  for (const [i, pair] of pairingsSeed.entries()) {
+    const source = productBySku.get(pair.source);
+    const target = productBySku.get(pair.target);
+    if (!source || !target) continue;
+    const existing = await prisma.productPairing.findUnique({
+      where: { sourceId_targetId: { sourceId: source.id, targetId: target.id } },
+    });
+    if (existing) continue;
+    await prisma.productPairing.create({
+      data: { sourceId: source.id, targetId: target.id, note: pair.note, sortOrder: i },
+    });
+    pairingCount += 1;
+  }
+
+  // Deals of the Day. dealPrice is computed from each product's own retail price rather than
+  // hardcoded, so it stays below retail however the workbook import changes a SKU's price. Only
+  // STOCK lines: made-to-order and CMI-routed products are not physical stock being cleared.
+  //
+  // Each line is a hardware/small-item SKU, deliberately distinct from the four clearance lines
+  // seeded above — a Daily Deal advertises a price while the clearance price lives on the product
+  // record, so putting both on one product would advertise two different prices for it. These
+  // three carry no clearance markdown.
+  const dealsSeed = [
+    { sku: 'ALS-HDW-0006', discount: 0.15, stockLimit: 25, headline: 'High-security multi-point lock' },
+    { sku: 'ALS-SLT-0001', discount: 0.2, stockLimit: 60, headline: 'Neutral-cure silicone sealant' },
+    { sku: 'ALS-FXN-0001', discount: 0.18, stockLimit: 40, headline: 'Self-drilling screws, box of 500' },
+  ];
+  const now = Date.now();
+  let dealCount = 0;
+  for (const d of dealsSeed) {
+    const product = await prisma.product.findUnique({
+      where: { sku: d.sku },
+      select: { id: true, retailPrice: true, clearancePrice: true, fulfilmentType: true },
+    });
+    if (!product || product.fulfilmentType !== 'STOCK') continue;
+    // Refuse to stack a deal on a clearance line: two advertised prices for one product is the
+    // discrepancy the CPA's price-display rules exist to prevent.
+    if (product.clearancePrice != null) continue;
+    const retail = Number(product.retailPrice);
+    // Rounded to the cent; a discount large enough to round to zero would violate the CHECK, so
+    // the same floor the clearance seed uses keeps the price a real positive figure.
+    const dealPrice = Math.max(1, Math.round(retail * (1 - d.discount) * 100) / 100);
+    const existing = await prisma.dailyDeal.findFirst({ where: { productId: product.id } });
+    if (existing) continue;
+    await prisma.dailyDeal.create({
+      data: {
+        productId: product.id,
+        dealPrice,
+        stockLimit: d.stockLimit,
+        claimed: 0,
+        headline: d.headline,
+        // A rolling 24-hour window anchored at seed time, so a freshly seeded environment always
+        // has at least one live countdown to render.
+        startsAt: new Date(now - 60 * 60 * 1000),
+        endsAt: new Date(now + 23 * 60 * 60 * 1000),
+        published: true,
+      },
+    });
+    dealCount += 1;
+  }
+  // Counts are the table totals, not the rows this run created. The seed is idempotent, so a
+  // second run creates nothing and a "created" count would print `0 pairings` while ten exist —
+  // which reads as a failed seed rather than an already-seeded one.
+  const [pairingTotal, dealTotal] = await Promise.all([
+    prisma.productPairing.count(),
+    prisma.dailyDeal.count(),
+  ]);
+  console.log(`  ${featuredSeed.length} featured picks, ${collectionsSeed.length} collections, ${pairingTotal} pairings (${pairingCount} new), ${dealTotal} daily deals (${dealCount} new)`);
 
   console.log('Seeding CMI partners…');
   const partners = [
