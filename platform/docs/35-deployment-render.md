@@ -164,21 +164,27 @@ The development defaults used otherwise are published in this public repository,
 refuses to run under `NODE_ENV=production` without them — otherwise they would become the live
 admin and trade credentials on an internet-facing store.
 
-**If they are missing, the API deploy fails, and the failure looks like a catalogue problem.**
-The check used to sit three hundred lines into the seed, after the catalogue had already been
+The requirement is per account and only while that account is **missing**. Both user upserts are
+`update: {}`, so on a database that already holds them the password is never read; demanding it
+regardless would fail every later deploy over a secret it would not use. The check is a read, so
+it still runs before any write.
+
+**A missing secret fails the API deploy, and the failure looks like a catalogue problem.** The
+check used to sit three hundred lines into the seed, after the catalogue had already been
 written, so the deploy aborted against a half-seeded database: products existed but clearance
 lines, CMS copy and merchandising rows did not, leaving the storefront rendering a catalogue
-with missing sections. The check now runs before the first write, so a missing secret leaves the
-database untouched and the error names both variables in one message:
+with missing sections. It now runs before the first write, so a missing secret leaves the
+database untouched, and the error names both variables in one message:
 
 ```
 Error: SEED_ADMIN_PASSWORD, SEED_TRADE_PASSWORD must be set when NODE_ENV=production —
-the development defaults are published in this repository
+the account does not exist yet and the development default is published in this repository
 ```
 
-Set both in the Render dashboard (they are `sync: false`, so they are never committed) and
-redeploy. The API has no `/api/v1/health` until its deploy completes, so a failing API deploy
-also shows as **502** on every API route while the storefront, which does not seed, deploys fine.
+On a database whose accounts already exist, the seed no longer needs these at all. Set both in
+the Render dashboard (they are `sync: false`, so they are never committed) and redeploy. The API
+has no `/api/v1/health` until its deploy completes, so a failing API deploy also shows as **502**
+on every API route while the storefront, which does not seed, deploys fine.
 
 ## An unhealthy API blanks the storefront, and the storefront caches the result
 

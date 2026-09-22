@@ -164,18 +164,33 @@ function requireSeedPassword(envKey: string, devDefault: string): string {
 // lines, no CMS copy), and the failed deploy made it look like the catalogue import was at
 // fault. Failing before the first write leaves the database untouched and the error names the
 // missing variable.
-function assertProductionSeedConfig() {
+//
+// A password is required only while its account does not yet exist. Both user upserts are
+// `update: {}`, so on a database that already has them the secret is never read — demanding it
+// regardless would fail every later deploy over a value it would not use. The existence check
+// is a read, so it still runs ahead of any write.
+const TRADE_EMAIL = 'buyer@example-trade.co.za';
+
+async function assertProductionSeedConfig() {
   if (process.env.NODE_ENV !== 'production') return;
-  const missing = ['SEED_ADMIN_PASSWORD', 'SEED_TRADE_PASSWORD'].filter((k) => !process.env[k]);
+  const adminEmail = process.env.SEED_ADMIN_EMAIL ?? 'admin@aluminiumstore.co.za';
+  const [admin, trade] = await Promise.all([
+    prisma.user.findUnique({ where: { email: adminEmail }, select: { id: true } }),
+    prisma.user.findUnique({ where: { email: TRADE_EMAIL }, select: { id: true } }),
+  ]);
+  const missing = [
+    !admin && !process.env.SEED_ADMIN_PASSWORD ? 'SEED_ADMIN_PASSWORD' : null,
+    !trade && !process.env.SEED_TRADE_PASSWORD ? 'SEED_TRADE_PASSWORD' : null,
+  ].filter(Boolean);
   if (missing.length > 0) {
     throw new Error(
-      `${missing.join(', ')} must be set when NODE_ENV=production — the development defaults are published in this repository`,
+      `${missing.join(', ')} must be set when NODE_ENV=production — the account does not exist yet and the development default is published in this repository`,
     );
   }
 }
 
 async function main() {
-  assertProductionSeedConfig();
+  await assertProductionSeedConfig();
   console.log(`Seeding catalogue from ${CATALOGUE.source.workbook} (sha256 ${CATALOGUE.source.sha256.slice(0, 16)}…)…`);
   console.log('Seeding catalogue taxonomy…');
   const subCategoryIds = new Map<string, string>();
@@ -376,21 +391,24 @@ async function main() {
   }
 
   console.log('Seeding admin, trade account, coupons and bundles…');
-  const adminPassword = requireSeedPassword('SEED_ADMIN_PASSWORD', 'ChangeMe!Admin1');
   const adminEmail = process.env.SEED_ADMIN_EMAIL ?? 'admin@aluminiumstore.co.za';
-  await prisma.user.upsert({
-    where: { email: adminEmail },
-    update: {},
-    create: {
-      email: adminEmail,
-      name: 'Platform Admin',
-      role: UserRole.ADMIN,
-      passwordHash: await bcrypt.hash(adminPassword, 12),
-    },
-  });
+  // `assertProductionSeedConfig` has already established that a password is present whenever the
+  // account is missing, so it is only read on the create path. Reading it unconditionally would
+  // abort a later deploy over a secret it never uses — the upsert is `update: {}` on an existing
+  // row. The hash is computed lazily for the same reason: bcrypt cost 12 is not free.
+  const existingAdmin = await prisma.user.findUnique({ where: { email: adminEmail }, select: { id: true } });
+  if (!existingAdmin) {
+    await prisma.user.create({
+      data: {
+        email: adminEmail,
+        name: 'Platform Admin',
+        role: UserRole.ADMIN,
+        passwordHash: await bcrypt.hash(requireSeedPassword('SEED_ADMIN_PASSWORD', 'ChangeMe!Admin1'), 12),
+      },
+    });
+  }
 
-  const tradeEmail = 'buyer@example-trade.co.za';
-  const tradePassword = requireSeedPassword('SEED_TRADE_PASSWORD', 'ChangeMe!Trade1');
+  const tradeEmail = TRADE_EMAIL;
   const existingCompany = await prisma.company.findFirst({ where: { name: 'Example Fabricators (Pty) Ltd' } });
   const company = existingCompany ?? (await prisma.company.create({
     data: { name: 'Example Fabricators (Pty) Ltd', registrationNo: '2019/123456/07', vatNumber: '4123456789' },
@@ -400,18 +418,19 @@ async function main() {
     update: {},
     create: { companyId: company.id, creditLimit: 150000, discountTier: DiscountTier.TRADE, approved: true, approvedAt: new Date() },
   });
-  await prisma.user.upsert({
-    where: { email: tradeEmail },
-    update: {},
-    create: {
-      email: tradeEmail,
-      name: 'Trade Buyer',
-      role: UserRole.TRADE,
-      passwordHash: await bcrypt.hash(tradePassword, 12),
-      companyId: company.id,
-      companyRole: CompanyRole.OWNER,
-    },
-  });
+  const existingTrade = await prisma.user.findUnique({ where: { email: tradeEmail }, select: { id: true } });
+  if (!existingTrade) {
+    await prisma.user.create({
+      data: {
+        email: tradeEmail,
+        name: 'Trade Buyer',
+        role: UserRole.TRADE,
+        passwordHash: await bcrypt.hash(requireSeedPassword('SEED_TRADE_PASSWORD', 'ChangeMe!Trade1'), 12),
+        companyId: company.id,
+        companyRole: CompanyRole.OWNER,
+      },
+    });
+  }
 
   const couponCode = 'WELCOME10';
   const existingCoupon = await prisma.coupon.findUnique({ where: { code: couponCode } });
@@ -668,8 +687,10 @@ async function main() {
 
   console.log('Seed complete.');
   if (process.env.NODE_ENV !== 'production') {
-    console.log(`  Admin login: ${adminEmail} / ${adminPassword}`);
-    console.log(`  Trade login: ${tradeEmail} / ${tradePassword}`);
+    // Both passwords are dev defaults here — `assertProductionSeedConfig` throws before any write
+    // if a production account is missing one, so this branch is unreachable in production.
+    console.log(`  Admin login: ${adminEmail} / ${requireSeedPassword('SEED_ADMIN_PASSWORD', 'ChangeMe!Admin1')}`);
+    console.log(`  Trade login: ${tradeEmail} / ${requireSeedPassword('SEED_TRADE_PASSWORD', 'ChangeMe!Trade1')}`);
   }
 }
 
