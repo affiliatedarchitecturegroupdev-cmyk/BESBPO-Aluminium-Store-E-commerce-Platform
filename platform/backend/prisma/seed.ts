@@ -139,6 +139,21 @@ const FAQ_ITEMS = [
   { question: 'How do I apply for a trade account?', answer: 'Register as a business from the Business Desk, submit your company registration and VAT number, and our team reviews the application. Approved accounts unlock trade pricing automatically at checkout.', category: 'Ordering', sortOrder: 1 },
 ];
 
+// The development passwords below are published in this repository, which is public. A seeded
+// account is only created when the row is absent, so on a fresh production database these
+// defaults would become the live admin and trade credentials on an internet-facing store.
+// Production therefore has to supply its own, and the seed refuses to run without them.
+function requireSeedPassword(envKey: string, devDefault: string): string {
+  const supplied = process.env[envKey];
+  if (supplied) return supplied;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      `${envKey} must be set when NODE_ENV=production — the development default is published in this repository`,
+    );
+  }
+  return devDefault;
+}
+
 async function main() {
   console.log(`Seeding catalogue from ${CATALOGUE.source.workbook} (sha256 ${CATALOGUE.source.sha256.slice(0, 16)}…)…`);
   console.log('Seeding catalogue taxonomy…');
@@ -242,9 +257,13 @@ async function main() {
         tradePrice: p.tradePrice,
         volumePrice: p.volumePrice,
         complianceRefs: { connect: compliance.map((c) => ({ id: c.id })) },
-        images: {
-          create: [{ url: `/images/products/${p.sku}.jpg`, altText: p.name, sortOrder: 0 }],
-        },
+        // No ProductImage row on purpose. The workbook carries no photography, so seeding
+        // `/images/products/${sku}.jpg` invented a URL for every one of the 2,147 SKUs and every
+        // catalogue tile and product page then requested a file that was never in the repository,
+        // turning each listing into a column of broken images. The tiles already collapse cleanly
+        // to their placeholder panel when a product has no image, which is the honest state for a
+        // line that has no photograph yet; staff attach real images through the CMS as they are
+        // shot. Only `create` is affected — `update: {}` leaves any existing image rows alone.
         ...(p.fulfilmentType === 'STOCK'
           ? { stockLevel: { create: { quantity: STOCK_QUANTITY, reserved: 0, reorderAt: 8, locationId: hub?.id ?? null } } }
           : {}),
@@ -319,7 +338,10 @@ async function main() {
         data: {
           ...p,
           completedAt: new Date(),
-          images: { create: [{ url: `/images/projects/${p.title.replace(/\W+/g, '-').toLowerCase()}.jpg`, caption: p.title, sortOrder: 0 }] },
+          // Same reasoning as the product images above: `/images/projects/…jpg` names a file that
+          // does not exist in the repository, and the case-study grid requests it for every card.
+          // The card's placeholder panel is the correct rendering until real project photography
+          // is attached.
         },
       });
     }
@@ -333,7 +355,7 @@ async function main() {
   }
 
   console.log('Seeding admin, trade account, coupons and bundles…');
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? 'ChangeMe!Admin1';
+  const adminPassword = requireSeedPassword('SEED_ADMIN_PASSWORD', 'ChangeMe!Admin1');
   const adminEmail = process.env.SEED_ADMIN_EMAIL ?? 'admin@aluminiumstore.co.za';
   await prisma.user.upsert({
     where: { email: adminEmail },
@@ -347,7 +369,7 @@ async function main() {
   });
 
   const tradeEmail = 'buyer@example-trade.co.za';
-  const tradePassword = process.env.SEED_TRADE_PASSWORD ?? 'ChangeMe!Trade1';
+  const tradePassword = requireSeedPassword('SEED_TRADE_PASSWORD', 'ChangeMe!Trade1');
   const existingCompany = await prisma.company.findFirst({ where: { name: 'Example Fabricators (Pty) Ltd' } });
   const company = existingCompany ?? (await prisma.company.create({
     data: { name: 'Example Fabricators (Pty) Ltd', registrationNo: '2019/123456/07', vatNumber: '4123456789' },
@@ -444,8 +466,10 @@ async function main() {
   }
 
   console.log('Seed complete.');
-  console.log(`  Admin login: ${adminEmail} / ${adminPassword}`);
-  console.log(`  Trade login: ${tradeEmail} / ${tradePassword}`);
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`  Admin login: ${adminEmail} / ${adminPassword}`);
+    console.log(`  Trade login: ${tradeEmail} / ${tradePassword}`);
+  }
 }
 
 main()

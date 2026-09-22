@@ -76,7 +76,8 @@ commit real values — `.env.example` files list the keys only.
 | Key | Source |
 |---|---|
 | `DATABASE_URL` | Provisioned from `aluminium-store-db` |
-| `JWT_SECRET` | Dashboard secret. **Must be at least 32 characters** — the app refuses to boot in production if it is shorter |
+| `JWT_SECRET` | `generateValue: true` — Render generates a 256-bit value. **Must be at least 32 characters**; the app refuses to boot in production if it is shorter, and a hand-entered short value fails the deploy at run time with nothing naming the value as the cause. Generated once at service creation, then stable across deploys |
+| `SEED_ADMIN_PASSWORD`, `SEED_TRADE_PASSWORD` | Dashboard secrets, required by the seed when `NODE_ENV=production`. The development defaults are published in this repository, so the seed refuses to run without them |
 | `PRICING_SERVICE_URL` | Provisioned from the pricing service |
 | `CORS_ORIGINS` | Provisioned from the storefront host |
 | `PAYFAST_MERCHANT_ID`, `PAYFAST_MERCHANT_KEY`, `LULAPAY_API_KEY`, `PAYJUSTNOW_API_KEY` | Dashboard secrets, once the gateways are contracted (Phase 3) |
@@ -90,7 +91,11 @@ commit real values — `.env.example` files list the keys only.
 | `NEXT_PUBLIC_SITE_URL` | The storefront's own public host |
 
 Render service host variables arrive **without a scheme**. The proxy route and `lib/api.ts` add
-`https://` when it is missing, so `BACKEND_ORIGIN=api.onrender.com` resolves correctly.
+`https://` when it is missing, so `BACKEND_ORIGIN=api.onrender.com` resolves correctly. The API
+does the same for `PRICING_SERVICE_URL` (`fromService` supplies a bare `host:port`), adding
+`http://` because traffic between services stays on the private network. Without that, `fetch`
+throws `TypeError: Failed to parse URL` — the URL parser accepts the scheme-less string, so the
+failure happens at request time with nothing naming the cause.
 
 ### Why the API proxy is a route handler, not a rewrite
 
@@ -138,12 +143,54 @@ binary, so the probe fails, Prisma silently falls back to the `openssl-1.1.x` en
 container then dies at boot with `libssl.so.1.1: cannot open shared object file`. Installing
 `openssl` makes the probe resolve to the `3.0.x` engine that matches bookworm.
 
-## Migrations
+## Migrations and seeding
 
-`startCommand` runs `npx prisma migrate deploy` before `node dist/main`. This runs at release
-time rather than in `buildCommand` because the build environment cannot reach the private
-database URL. `migrate deploy` is idempotent and takes an advisory lock, so restarts and
-multiple instances are safe.
+`preDeployCommand` runs `npx prisma migrate deploy && npm run prisma:seed` after the build and
+before the new build is promoted. This runs at release time rather than in `buildCommand`
+because the build environment cannot reach the private database URL. `migrate deploy` is
+idempotent and takes an advisory lock, and the seed is idempotent too — every write is an upsert
+or an existence check — so re-running both on every deploy is safe.
+
+They previously sat at the front of `startCommand` (`npx prisma migrate deploy && node dist/main`).
+A start command runs once per instance on every restart, which is the wrong place for a one-shot
+database step, and it meant a fresh database was only ever migrated and never populated.
+
+**The seed is not optional.** Nothing else populates the database, and the storefront renders an
+empty catalogue without it: the 2,147 SKUs, the taxonomy the pricing service keys its assumption
+tables off, and the clearance lines the homepage "Clearance Sale" section reads all come from it.
+
+A fresh production database therefore needs `SEED_ADMIN_PASSWORD` and `SEED_TRADE_PASSWORD` set.
+The development defaults used otherwise are published in this public repository, so the seed
+refuses to run under `NODE_ENV=production` without them — otherwise they would become the live
+admin and trade credentials on an internet-facing store.
+
+## An unhealthy API blanks the storefront, and the storefront caches the result
+
+The homepage and other catalogue pages are statically prerendered with `revalidate = 60`. When
+the API is unreachable **at build time**, every `serverFetch` returns `null`, and each section
+falls back to its static placeholder. The clearance shelf has no placeholder by design ("a
+clearance shelf with nothing on it must disappear rather than advertise a made-up discount"), so
+it is dropped entirely — a clearance section missing from a deployed bundle is not evidence that
+the code is missing, only that the API was down when it was built.
+
+The page then revalidates on the fetch interval, so it recovers on its own once the API is up.
+Two things stop that recovery in practice:
+
+- **The API is down for good.** While the API never deploys, the prerender is never refreshed.
+- **Build-time fetch to `localhost`.** In a container that resolves `localhost` to `::1` while
+  the API listens on IPv4, the build silently fetches nothing and bakes in the fallbacks.
+  `BACKEND_ORIGIN` must be set on the storefront at build time — as `render.yaml` does via
+  `fromService` — rather than relying on the `http://localhost:4000` default.
+
+Both failures are silent: the build succeeds, the storefront returns 200, and the page simply
+shows less than it should.
+
+## A service whose deploys all fail answers 502 `no-deploy`
+
+`x-render-routing: no-deploy` means Render has no successfully deployed instance to route to —
+the service has never come up. It is a deployment-history symptom, not a code one: check whether
+*any* deploy for that service ever succeeded before changing anything in the repository. A
+sibling service that ships the same commit and is fine proves the code is not the cause.
 
 ## Health checks
 

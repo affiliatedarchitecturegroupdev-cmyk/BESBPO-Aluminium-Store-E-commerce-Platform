@@ -51,10 +51,18 @@ services:
     # here. The build then dies with `sh: 1: nest: not found`. (`prisma` survives on its own only
     # because @prisma/client depends on it; the other two do not.)
     buildCommand: npm ci --include=dev && npx prisma generate && npm run build
-    # Migrations run before the server accepts traffic. `migrate deploy` is idempotent and takes
-    # an advisory lock, so this is safe on restart and across instances. It runs here rather than
-    # in buildCommand because the build step has no access to the private database URL.
-    startCommand: npx prisma migrate deploy && node dist/main
+    # Migrations and seeding run after the build but before the new build is promoted, on their
+    # own instance with access to the private database URL. They used to sit at the front of
+    # `startCommand`, which runs once per instance on every restart and is the wrong place for a
+    # one-shot database step.
+    #
+    # The seed is not optional here. Nothing else populates a fresh database, and the storefront
+    # renders an empty catalogue without it: the 2,147 SKUs, the taxonomy the pricing service keys
+    # off, and the clearance lines the homepage "Clearance Sale" section reads all come from it.
+    # It is idempotent — every write is an upsert or an existence check — so re-running it on
+    # each deploy is safe.
+    preDeployCommand: npx prisma migrate deploy && npm run prisma:seed
+    startCommand: node dist/main
     healthCheckPath: /api/v1/health
     autoDeploy: true
     envVars:
@@ -67,7 +75,21 @@ services:
           name: aluminium-store-db
           property: connectionString
       # Secret values live in the Render dashboard, never in this file.
+      #
+      # Generated rather than hand-entered. The app refuses to boot in production when this is
+      # shorter than 32 characters, so a short dashboard value fails the deploy at run time with a
+      # bare `Error: JWT_SECRET must be at least 32 characters in production` and nothing naming
+      # the value as the cause. Render generates a base64-encoded 256-bit value here, which always
+      # satisfies the check. It is generated once, when the service is created, and is then stable
+      # across deploys.
       - key: JWT_SECRET
+        generateValue: true
+      # Credentials for the admin and trade accounts the seed creates. `sync: false` because the
+      # development defaults are published in this public repository, and the seed refuses to run
+      # under NODE_ENV=production without them.
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: SEED_TRADE_PASSWORD
         sync: false
       - key: PRICING_SERVICE_URL
         # Internal URL: traffic to another Render service stays on the private network.

@@ -2,7 +2,15 @@ import { Injectable, HttpException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PriceRequestDto } from './dto/price-request.dto';
 
-const PRICING_SERVICE_URL = process.env.PRICING_SERVICE_URL ?? 'http://pricing-service:8000';
+// Render's `fromService` `hostport` property supplies a bare `host:port` with no scheme, and
+// `fetch('host:port/price')` throws `TypeError: fetch failed` rather than treating it as http.
+// The URL parser accepts the scheme-less string as a valid URL, so this fails at request time
+// with nothing naming the cause. Promote it the same way the storefront does.
+function pricingServiceUrl(): string {
+  const configured = process.env.PRICING_SERVICE_URL ?? 'http://pricing-service:8000';
+  const withScheme = /^https?:\/\//.test(configured) ? configured : `http://${configured}`;
+  return withScheme.replace(/\/$/, '');
+}
 
 @Injectable()
 export class ConfiguratorService {
@@ -42,7 +50,7 @@ export class ConfiguratorService {
       discountTier: dto.discountTier ?? 'RETAIL',
     };
 
-    const res = await fetch(`${PRICING_SERVICE_URL}/price`, {
+    const res = await fetch(`${pricingServiceUrl()}/price`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

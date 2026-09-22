@@ -44,3 +44,17 @@ export type LatestReview = {
   user?: { name: string } | null;
   product?: { name: string; sku: string } | null;
 };
+
+// Editable homepage copy. `ANNOUNCEMENT` blocks feed the ticker, `HERO_SLIDE` blocks feed the
+// store hero — see docs/19-cms.md. `imageUrl` is nullable because seeded slides carry no
+// artwork; a slide without one still renders on its background colour.
+export type ContentBlock = {
+  id: string;
+  key: string;
+  type: string;
+  title: string;
+  body: string | null;
+  imageUrl: string | null;
+  linkUrl: string | null;
+  sortOrder: number;
+};
