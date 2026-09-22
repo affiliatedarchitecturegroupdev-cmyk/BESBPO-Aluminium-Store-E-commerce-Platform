@@ -80,6 +80,31 @@ export class CatalogBrowseService {
     return { items, total, take, skip };
   }
 
+  // Powers the homepage "Clearance Sale" carousel. A row is on clearance only while its
+  // clearancePrice is set and its window — if one was given — has not passed; the DATE filter
+  // runs in the database rather than being filtered after the fetch, so an expired campaign
+  // cannot occupy a slot that a live one should take.
+  //
+  // Clearance is deliberately independent of the discount tier: a clearance price is the
+  // customer-facing markdown, and a trade buyer pays it too rather than a further-discounted
+  // tier price. The cart enforces that by charging clearancePrice when it is active.
+  async findClearance(take = 8) {
+    const items = await this.prisma.product.findMany({
+      where: {
+        active: true,
+        clearancePrice: { not: null },
+        OR: [{ clearanceEndsAt: null }, { clearanceEndsAt: { gt: new Date() } }],
+      },
+      orderBy: { clearanceEndsAt: 'asc' },
+      take: Math.min(take, 24),
+      include: {
+        images: { orderBy: { sortOrder: 'asc' }, take: 1 },
+        subCategory: { include: { category: true } },
+      },
+    });
+    return { items, total: items.length };
+  }
+
   async findProductBySku(sku: string) {
     const product = await this.prisma.product.findUnique({
       where: { sku },

@@ -397,6 +397,37 @@ async function main() {
     }
   }
 
+  // Clearance lines for the homepage "Clearance Sale" carousel. The markdown is computed from
+  // each product's own retail price rather than hardcoded, so the sale price stays firmly below
+  // retail — and therefore inside the Product_clearance_below_retail CHECK — however the workbook
+  // import changes a given SKU's price. Only STOCK lines are cleared: made-to-order and
+  // CMI-routed products are not physical stock being moved.
+  console.log('Seeding clearance lines…');
+  const CLEARANCE_SKUS: { sku: string; discount: number; days?: number }[] = [
+    { sku: 'ALS-SLD-0001', discount: 0.25, days: 30 },
+    { sku: 'ALS-CMW-0031', discount: 0.3 },
+    { sku: 'ALS-HDW-0008', discount: 0.35, days: 14 },
+    { sku: 'ALS-SLW-0001', discount: 0.2 },
+  ];
+  let cleared = 0;
+  for (const c of CLEARANCE_SKUS) {
+    const prod = await prisma.product.findUnique({ where: { sku: c.sku } });
+    if (!prod || prod.fulfilmentType !== 'STOCK') continue;
+    const retail = Number(prod.retailPrice);
+    // Rounded to the cent; a discount large enough to round to zero would violate the CHECK, so
+    // the floor keeps the seeded price a real positive figure rather than failing the constraint.
+    const price = Math.max(1, Math.round(retail * (1 - c.discount) * 100) / 100);
+    await prisma.product.update({
+      where: { sku: c.sku },
+      data: {
+        clearancePrice: price,
+        clearanceEndsAt: c.days ? new Date(Date.now() + c.days * 24 * 60 * 60 * 1000) : null,
+      },
+    });
+    cleared += 1;
+  }
+  console.log(`  ${cleared} clearance lines`);
+
   console.log('Seeding CMI partners…');
   const partners = [
     { name: 'Cape Facade Works', province: 'WESTERN_CAPE' as Province, capabilities: ['Curtain Walling', 'Structural Glazing'], capacityM2PerMonth: 1200 },

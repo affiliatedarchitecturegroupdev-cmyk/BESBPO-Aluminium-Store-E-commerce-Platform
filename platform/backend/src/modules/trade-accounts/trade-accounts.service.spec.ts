@@ -54,6 +54,30 @@ describe('TradeAccountsService.consumeCredit', () => {
     await expect(service.consumeCredit('c1', 2500)).rejects.toThrow(/approved trade account/);
   });
 
+  it('refuses an approved account that has no credit limit set', async () => {
+    // The original defect: `creditLimit IS NULL` was an unguarded pass-through, so approving an
+    // account without agreeing a ceiling granted it *unlimited* credit terms — while the business
+    // desk simultaneously told the buyer it had no credit facility. Refusal is the safe reading.
+    const executeRaw = jest.fn().mockResolvedValue(0);
+    const service = buildService(executeRaw, { approved: true, creditLimit: null, creditUsed: 0 });
+
+    await expect(service.consumeCredit('c1', 2500)).rejects.toThrow(BadRequestException);
+  });
+
+  it('names the missing facility rather than implying a limit was hit', async () => {
+    const executeRaw = jest.fn().mockResolvedValue(0);
+    const service = buildService(executeRaw, { approved: true, creditLimit: null, creditUsed: 0 });
+
+    await expect(service.consumeCredit('c1', 2500)).rejects.toThrow(/no credit facility/);
+  });
+
+  it('never describes a null limit as unlimited', async () => {
+    const executeRaw = jest.fn().mockResolvedValue(0);
+    const service = buildService(executeRaw, { approved: true, creditLimit: null, creditUsed: 0 });
+
+    await expect(service.consumeCredit('c1', 2500)).rejects.not.toThrow(/unlimited/);
+  });
+
   it('does not query the database for a zero or negative amount', async () => {
     // A zero-value order should not consume credit, and must not be mistaken for a refusal.
     const executeRaw = jest.fn().mockResolvedValue(0);

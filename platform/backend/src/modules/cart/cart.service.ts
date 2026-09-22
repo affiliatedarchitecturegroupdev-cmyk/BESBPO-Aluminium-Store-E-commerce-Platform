@@ -69,6 +69,16 @@ export class CartService {
     // when the line is area-rated and the pricing service can compute it. A custom size must be
     // priced by the engine; a standard-size standard line already has an authoritative price.
     const isCustomSize = widthMm !== (product.widthMm ?? 0) || heightMm !== (product.heightMm ?? 0);
+
+    // An active clearance price is the customer-facing markdown and overrides the tier price
+    // rather than stacking with it — a cleared line is being moved at one advertised price, not
+    // offered at Trade or Volume off an already-reduced figure. It applies to the standard
+    // stocked item only: a custom-sized line is made to order, so it is not the stock being
+    // cleared and must be priced normally.
+    const clearance = this.activeClearancePrice(product);
+    if (clearance !== null && !isCustomSize) {
+      unitPrice = clearance;
+    }
     const pricedByEngine = product.subCategory.pricingBasis === 'FRAME_GLAZED' && isCustomSize;
 
     let pricedVia: 'PRICING_SERVICE' | 'PRICING_SERVICE_FALLBACK' | 'CATALOGUE_PRICE' = 'CATALOGUE_PRICE';
@@ -167,6 +177,16 @@ export class CartService {
     if (tier === 'TRADE') return price.trade;
     if (tier === 'VOLUME') return price.volume;
     return price.retail;
+  }
+
+  // A clearance price counts only while it is set and its window has not closed. The expiry is
+  // checked here as well as in the homepage query: the query decides what to advertise, but this
+  // is what decides what a buyer is actually charged, and it must not depend on the section
+  // having filtered correctly. An expired markdown charges the normal tier price.
+  private activeClearancePrice(product: { clearancePrice: unknown; clearanceEndsAt: Date | null }): number | null {
+    if (product.clearancePrice == null) return null;
+    if (product.clearanceEndsAt && product.clearanceEndsAt <= new Date()) return null;
+    return Number(product.clearancePrice);
   }
 
   private async discountTierFor(userId: string): Promise<'RETAIL' | 'TRADE' | 'VOLUME'> {

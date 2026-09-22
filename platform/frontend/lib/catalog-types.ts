@@ -57,6 +57,9 @@ export type Product = {
   retailPrice: string | number;
   tradePrice: string | number;
   volumePrice: string | number;
+  // Set only while a stock line is on clearance; the markdown a buyer is charged, below retail.
+  clearancePrice: string | number | null;
+  clearanceEndsAt: string | null;
   frameClass: string | null;
   active: boolean;
   images?: ProductImage[];

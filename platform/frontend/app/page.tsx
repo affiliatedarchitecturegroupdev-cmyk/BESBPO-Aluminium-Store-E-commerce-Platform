@@ -39,11 +39,27 @@ function toCarouselProducts(products: Product[]): CarouselProduct[] {
   }));
 }
 
+// Clearance shows two prices: the markdown charged and the retail it came off, struck through.
+// The saving is computed from the two figures the API returned rather than a stored percentage,
+// so the badge can never disagree with the prices beside it.
+function toClearanceProducts(products: Product[]): CarouselProduct[] {
+  return products
+    .filter((p) => p.clearancePrice != null)
+    .map((p) => ({
+      sku: p.sku,
+      name: `${p.name}${p.widthMm && p.heightMm ? ` — ${p.widthMm}×${p.heightMm}mm` : ''}`,
+      priceLabel: formatRand(p.clearancePrice as string | number),
+      originalPriceLabel: formatRand(p.retailPrice),
+      badge: 'Clearance',
+    }));
+}
+
 export default async function Page() {
-  const [categories, trending, recent, bundles, ads, projects, reviews] = await Promise.all([
+  const [categories, trending, recent, clearance, bundles, ads, projects, reviews] = await Promise.all([
     serverFetch<Category[]>('/catalog/categories'),
     serverFetch<ProductList>('/catalog/products?sort=name&take=8'),
     serverFetch<ProductList>('/catalog/products?sort=recent&take=8'),
+    serverFetch<ProductList>('/catalog/clearance?take=8'),
     serverFetch<Bundle[]>('/promotions/bundles'),
     serverFetch<Advertisement[]>('/advertisements/active'),
     serverFetch<Project[]>('/projects/featured'),
@@ -52,6 +68,9 @@ export default async function Page() {
 
   const trendingCards = trending?.items?.length ? toCarouselProducts(trending.items) : FALLBACK_TRENDING;
   const recentCards = recent?.items?.length ? toCarouselProducts(recent.items) : [];
+  // No fallback here: a clearance shelf with nothing on it must disappear rather than advertise
+  // a made-up discount, so the section is omitted entirely when the API returns nothing.
+  const clearanceCards = clearance?.items?.length ? toClearanceProducts(clearance.items) : [];
   const bundleCards: BundleCard[] = bundles?.length
     ? bundles.map((b) => ({
         id: b.id,
@@ -96,6 +115,9 @@ export default async function Page() {
       <AdSlot ad={adFor(1)} />
       <BundleGrid anchorId="bundles" bundles={bundleCards} />
       <ProductCarousel anchorId="recent-arrivals" title="Recent Arrivals" products={recentCards} />
+      {clearanceCards.length > 0 && (
+        <ProductCarousel anchorId="clearance" title="Clearance Sale" subtitle="End-of-line and overstock, while it lasts" products={clearanceCards} />
+      )}
       <AdSlot ad={adFor(2)} />
       <AdSlot ad={adFor(3)} />
       <InstallationShowcase projects={featuredProjects} />

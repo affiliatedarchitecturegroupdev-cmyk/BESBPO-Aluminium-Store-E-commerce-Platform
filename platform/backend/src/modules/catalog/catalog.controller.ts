@@ -46,6 +46,13 @@ export class CatalogController {
     return this.browse.findLocations();
   }
 
+  // Homepage "Clearance Sale" carousel (spec §7.1). Public — a clearance price is
+  // customer-facing, so no tier is consulted here.
+  @Get('clearance')
+  clearance(@Query('take') take?: string) {
+    return this.browse.findClearance(Number(take) || 8);
+  }
+
   // Product lookup by SKU — the PDP route key (docs/02-storefront-ux-ia.md).
   @Get('by-sku/:sku')
   bySku(@Param('sku') sku: string) {
