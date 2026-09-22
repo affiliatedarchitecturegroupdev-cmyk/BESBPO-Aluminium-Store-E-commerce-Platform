@@ -1,4 +1,4 @@
-import HeroSliderStore from '../components/HeroSliderStore';
+import HeroSliderStore, { type StoreHeroSlide } from '../components/HeroSliderStore';
 import AnnouncementTicker from '../components/AnnouncementTicker';
 import TrustBadges from '../components/TrustBadges';
 import SocialProofCounters from '../components/SocialProofCounters';
@@ -13,7 +13,7 @@ import NewsletterSignup from '../components/NewsletterSignup';
 import BusinessDeskCTA from '../components/BusinessDeskCTA';
 import { serverFetch } from '../lib/api';
 import { formatRand, type Advertisement, type Bundle, type Category, type Product, type Project, type ProductList } from '../lib/catalog-types';
-import type { LatestReview } from '../lib/content-types';
+import type { ContentBlock, LatestReview } from '../lib/content-types';
 
 // Route: / (home) — the 18-section stack described in the spec (docs/02-storefront-ux-ia.md).
 // Every section reads live data from the API via serverFetch; each falls back to a static
@@ -55,7 +55,7 @@ function toClearanceProducts(products: Product[]): CarouselProduct[] {
 }
 
 export default async function Page() {
-  const [categories, trending, recent, clearance, bundles, ads, projects, reviews] = await Promise.all([
+  const [categories, trending, recent, clearance, bundles, ads, projects, reviews, announcements, heroSlides] = await Promise.all([
     serverFetch<Category[]>('/catalog/categories'),
     serverFetch<ProductList>('/catalog/products?sort=name&take=8'),
     serverFetch<ProductList>('/catalog/products?sort=recent&take=8'),
@@ -64,6 +64,8 @@ export default async function Page() {
     serverFetch<Advertisement[]>('/advertisements/active'),
     serverFetch<Project[]>('/projects/featured'),
     serverFetch<LatestReview[]>('/reviews/latest?take=6'),
+    serverFetch<ContentBlock[]>('/cms/content-blocks?type=ANNOUNCEMENT'),
+    serverFetch<ContentBlock[]>('/cms/content-blocks?type=HERO_SLIDE'),
   ]);
 
   const trendingCards = trending?.items?.length ? toCarouselProducts(trending.items) : FALLBACK_TRENDING;
@@ -98,10 +100,24 @@ export default async function Page() {
     productName: r.product?.name ?? '',
   }));
 
+  // CMS-driven homepage copy, with the component's own hardcoded set as the fallback for a
+  // deployment where nobody has edited it yet.
+  const announcementTexts: string[] = (announcements ?? [])
+    .map((b) => b.title)
+    .filter((t): t is string => Boolean(t));
+  const storeHeroSlides: StoreHeroSlide[] = (heroSlides ?? []).map((b) => ({
+    tag: b.title,
+    title: b.title,
+    sub: b.body ?? '',
+    ctaLabel: 'Shop Now',
+    ctaHref: b.linkUrl ?? '/catalogue',
+    bg: '#1B2733',
+  }));
+
   return (
     <main>
-      <HeroSliderStore />
-      <AnnouncementTicker />
+      <HeroSliderStore slides={storeHeroSlides.length ? storeHeroSlides : undefined} />
+      <AnnouncementTicker announcements={announcementTexts} />
       <TrustBadges />
       <SocialProofCounters />
 
