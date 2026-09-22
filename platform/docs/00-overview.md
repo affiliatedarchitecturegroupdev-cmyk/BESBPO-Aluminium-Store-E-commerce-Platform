@@ -26,5 +26,5 @@ cart, checkout, and account primitives are **adapted**.
 
 ## Document set
 This `docs/` folder is the full guideline cluster referenced from the Technical & Product
-Specification (see the companion PDF). Eighteen documents, one concern each — read the spec
-first for the executive summary, then this folder for implementation detail.
+Specification (see the companion PDF). One document per concern — read the spec first for the
+executive summary, then this folder for implementation detail.

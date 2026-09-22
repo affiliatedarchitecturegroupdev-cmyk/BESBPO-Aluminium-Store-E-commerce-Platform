@@ -26,6 +26,31 @@ export function isSignedIn(): boolean {
   return getToken() !== null;
 }
 
+// Anonymous view history needs a key of its own. A signed-in buyer is keyed by their user id
+// server-side; a guest gets an opaque id generated here and kept in localStorage. It is scoped to
+// one browser only — the same guest on another device has no history, which is the honest limit
+// of not having an account rather than a shortcoming to paper over.
+const SESSION_ID_KEY = 'als_session_id';
+
+/** The browser's anonymous session id, created and persisted on first use. */
+export function getSessionId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const existing = window.localStorage.getItem(SESSION_ID_KEY);
+    if (existing) return existing;
+    const generated =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `s-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    window.localStorage.setItem(SESSION_ID_KEY, generated);
+    return generated;
+  } catch {
+    // Storage blocked (private mode, disabled cookies). View history degrades to this page visit
+    // only rather than throwing.
+    return null;
+  }
+}
+
 /** Absolute API origin for client calls that need an Authorization header. */
 function apiOrigin(): string {
   const base = process.env.NEXT_PUBLIC_API_URL ?? '/api/v1';
@@ -33,6 +58,29 @@ function apiOrigin(): string {
   // Same-origin relative path: keep it relative so the Next.js rewrite proxies the request
   // and CORS never enters the picture (next.config.js).
   return base;
+}
+
+/**
+ * Unauthenticated JSON GET for client components that read public endpoints on mount (the
+ * interactive merchandising sections: budget tabs, deal countdowns, view history).
+ *
+ * Deliberately separate from `apiFetch`: these reads must work for a signed-out visitor, and
+ * routing them through the authed helper would attach a token when one happens to exist and
+ * silently change what the endpoint returns.
+ */
+export async function apiGet<T>(path: string): Promise<{ ok: true; data: T } | { ok: false; status: number; message: string }> {
+  try {
+    const res = await fetch(`${apiOrigin()}${path}`, { headers: { 'Content-Type': 'application/json' } });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      const message = Array.isArray(parsed?.message) ? parsed.message.join(', ') : parsed?.message;
+      return { ok: false, status: res.status, message: message ?? `Request failed (${res.status})` };
+    }
+    return { ok: true, data: parsed as T };
+  } catch {
+    return { ok: false, status: 0, message: 'Could not reach the store right now.' };
+  }
 }
 
 /**

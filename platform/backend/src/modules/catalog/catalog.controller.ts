@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { CatalogService } from './catalog.service';
 import { CatalogBrowseService } from './catalog-browse.service';
+import { CatalogMerchandisingService } from './catalog-merchandising.service';
 import { CreateProductDto } from './dto/create-catalog.dto';
 import { UpdateProductDto } from './dto/update-catalog.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -12,6 +13,7 @@ export class CatalogController {
   constructor(
     private readonly service: CatalogService,
     private readonly browse: CatalogBrowseService,
+    private readonly merchandising: CatalogMerchandisingService,
   ) {}
 
   // ---- Storefront read model ----
@@ -34,6 +36,33 @@ export class CatalogController {
   @Get('finishes')
   finishes() {
     return this.browse.findFinishes();
+  }
+
+  // ---- Merchandising sections (docs/37-merchandising-sections.md) ----
+  // Each sits above the `:id` route below so a literal path is never captured as an id.
+
+  // Best Sellers — ranked leaderboard, OrderItem quantity aggregation.
+  @Get('best-sellers')
+  bestSellers(@Query('take') take?: string) {
+    return this.merchandising.getBestSellers(Number(take) || 8);
+  }
+
+  // Top Rated — Review aggregation with a minimum-review threshold.
+  @Get('top-rated')
+  topRated(@Query('take') take?: string, @Query('minReviews') minReviews?: string) {
+    return this.merchandising.getTopRated(Number(take) || 8, Number(minReviews) || 3);
+  }
+
+  // Shop by Finish — the swatch set, or one finish's products when a finishId is given.
+  @Get('by-finish')
+  byFinish(@Query('finishId') finishId?: string, @Query('take') take?: string) {
+    return this.merchandising.getByFinish(finishId, Number(take) || 60);
+  }
+
+  // Budget Shop — tabbed, approximate price bands.
+  @Get('budget-shop')
+  budgetShop(@Query('tier') tier?: string, @Query('take') take?: string) {
+    return this.merchandising.getBudgetShop(tier, Number(take) || 12);
   }
 
   @Get('glazing-packages')

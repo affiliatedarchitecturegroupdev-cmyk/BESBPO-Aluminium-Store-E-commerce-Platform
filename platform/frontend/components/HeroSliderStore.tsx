@@ -14,7 +14,10 @@ export type StoreHeroSlide = Slide;
 const SLIDES: Slide[] = [
   { tag: 'New Season', title: 'IGU Double-Glazed windows, now standard-priced', sub: 'Every sliding and casement window offered in both single and double-glazed packages.', ctaLabel: 'Shop Windows', ctaHref: '/catalogue/windows', bg: '#1B2733' },
   { tag: 'Bundle Deal', title: 'Complete door + hardware bundles', sub: 'Save when you order the door, handle set, and lock together.', ctaLabel: 'Shop Bundles', ctaHref: '/#bundles', bg: '#2C4F6B' },
-  { tag: 'Clearance', title: 'End-of-line finishes — up to 20% off', sub: 'Selected Bronze Anodised stock while it lasts.', ctaLabel: 'Shop Clearance', ctaHref: '/#clearance', bg: '#9C6B35' },
+  // "up to 35% off" matches the deepest clearance markdown actually seeded; the copy names the
+  // lines rather than a finish, because the clearance set is mixed and changes. A hero claiming a
+  // discount or a finish the catalogue no longer carries is misleading marketing (CPA s.41).
+  { tag: 'Clearance', title: 'End-of-line stock — up to 35% off', sub: 'Selected windows, doors and hardware while it lasts.', ctaLabel: 'Shop Clearance', ctaHref: '/catalogue?clearance=1', bg: '#9C6B35' },
   { tag: 'Trending', title: 'Pivot entrance doors are this month\u2019s top search', sub: 'A statement entrance, made to your opening.', ctaLabel: 'Explore Pivot Doors', ctaHref: '/catalogue/doors', bg: '#1B2733' },
   { tag: 'New Arrivals', title: 'Bay & Bow window units now in the catalogue', sub: '48 new SKUs across 3 configurations.', ctaLabel: 'See What\u2019s New', ctaHref: '/#recent-arrivals', bg: '#3E6E91' },
   { tag: 'Business', title: 'Trade accounts — 12% off, from day one', sub: 'Apply for a Business Desk account for your company.', ctaLabel: 'Apply for Trade', ctaHref: '/business/dashboard', bg: '#1B2733' },

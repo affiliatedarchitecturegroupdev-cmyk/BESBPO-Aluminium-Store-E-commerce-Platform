@@ -1,12 +1,20 @@
 import Link from 'next/link';
 import Configurator from '../../../components/Configurator';
+import ProductPairingsSection from '../../../components/merch/ProductPairingsSection';
+import ProductViewTracker from '../../../components/merch/ProductViewTracker';
+import RecentlyViewedSection from '../../../components/merch/RecentlyViewedSection';
+import RecommendedSection from '../../../components/merch/RecommendedSection';
 import { serverFetch } from '../../../lib/api';
 import { formatRand, type Finish, type GlazingPackage, type Product } from '../../../lib/catalog-types';
+import type { ProductPairing } from '../../../lib/merchandising-types';
 
 // Route: /product/[sku] — single SKU detail + the live configurator, the platform's
 // centrepiece interaction (docs/03-configurator-spec.md). The configurator repriced on
 // every change against the FastAPI pricing microservice, whose formulas are cross-verified
 // to the cent against the Pricing Framework workbook.
+//
+// Two of the ten merchandising sections are PDP rather than homepage sections: "Complete the
+// Project" pairings, and the view history that feeds Recently Viewed / Recommended For You.
 export default async function Page({ params }: { params: { sku: string } }) {
   const [product, finishes, glazingPackages] = await Promise.all([
     serverFetch<Product>(`/catalog/by-sku/${params.sku}`),
@@ -24,6 +32,8 @@ export default async function Page({ params }: { params: { sku: string } }) {
       </main>
     );
   }
+
+  const pairings = await serverFetch<ProductPairing[]>(`/product-pairings/by-sku/${product.sku}`);
 
   const finishList = (finishes ?? []).map((f) => ({ id: f.id, name: f.name, hex: f.hex }));
   const glazingList = (glazingPackages ?? []).map((g) => ({
@@ -94,6 +104,16 @@ export default async function Page({ params }: { params: { sku: string } }) {
           discountTier="RETAIL"
         />
       </div>
+
+      {/* Records this view so "Recently Viewed" and "Recommended For You" have something to show
+          on the visitor's next page. Renders nothing. */}
+      <ProductViewTracker productId={product.id} />
+
+      <ProductPairingsSection pairings={pairings ?? []} />
+
+      {/* excludeSku keeps the page you are on out of its own history and recommendation rows. */}
+      <RecentlyViewedSection excludeSku={product.sku} />
+      <RecommendedSection excludeSku={product.sku} />
     </main>
   );
 }

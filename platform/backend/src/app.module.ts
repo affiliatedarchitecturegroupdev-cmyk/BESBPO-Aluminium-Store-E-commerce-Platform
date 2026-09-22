@@ -34,6 +34,10 @@ import { NewsletterModule } from './modules/newsletter/newsletter.module';
 import { AdvertisementsModule } from './modules/advertisements/advertisements.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { FeaturedProductsModule } from './modules/featured-products/featured-products.module';
+import { CollectionsModule } from './modules/collections/collections.module';
+import { DailyDealsModule } from './modules/daily-deals/daily-deals.module';
+import { ProductPairingsModule } from './modules/product-pairings/product-pairings.module';
 
 @Module({
   imports: [
@@ -76,6 +80,10 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
     AdvertisementsModule,
     ProjectsModule,
     AnalyticsModule,
+    FeaturedProductsModule,
+    CollectionsModule,
+    DailyDealsModule,
+    ProductPairingsModule,
   ],
 })
 export class AppModule {}
